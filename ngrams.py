@@ -45,158 +45,76 @@ class ngrams:
 
     def processFile(self, op, typ):
         tokens = ""
-        if typ == 0:
-            if sys.version_info < (3,):
-                punctuation = string.punctuation.replace("?", "").replace("'", "")
-                punctuation = punctuation.replace("!", "").replace(".", "")
-                with open(sys.argv[len(sys.argv)-2], 'r') as reviews:
-                    tokens = unicode(reviews.read(), errors='replace')
+        f_num = 1 if typ == 1 else 2
+        if sys.version_info < (3,):
+            punctuation = string.punctuation.replace("?", "").replace("'", "")
+            punctuation = punctuation.replace("!", "").replace(".", "")
+            with open(sys.argv[len(sys.argv)-f_num], 'r') as reviews:
+                tokens = unicode(reviews.read(), errors='replace')
 
-            else:
-                punctuation = string.punctuation.translate(str.maketrans(
-                                                           "", "", ".?!'"))
-                with open(sys.argv[len(sys.argv)-2], 'r',
-                          errors="replace") as reviews:
-                    tokens = reviews.read()
+        else:
+            punctuation = string.punctuation.translate(str.maketrans(
+                                                       "", "", ".?!'"))
+            with open(sys.argv[len(sys.argv)-f_num], 'r',
+                      errors="replace") as reviews:
+                tokens = reviews.read()
 
-            if not op:
-                tokens = tokens.lower()
+        if not op:
+            tokens = tokens.lower()
 
-            # Ensure these tokens aren't in the text
-            while self.start_token in tokens:
-                self.start_token += '>'
-            while self.end_token in tokens:
-                self.end_token += '>'
-            while self.unk_token in tokens:
-                self.unk_token += '>'
+        # Ensure these tokens aren't in the text
+        while self.start_token in tokens:
+            self.start_token += '>'
+        while self.end_token in tokens:
+            self.end_token += '>'
+        while self.unk_token in tokens:
+            self.unk_token += '>'
 
-            start_tokens = ' ' + self.end_token
-            for i in range(self.n-1):
-                start_tokens += ' ' + self.start_token + ' '
+        begin_tokens = ""
+        start_tokens = ' ' + self.end_token
+        for i in range(self.n-1):
+            begin_tokens += ' ' + self.start_token + ' '
+        start_tokens += begin_tokens
 
-            tokens = re_sub(":\)", ' ' + "\u1F601" + ' ', tokens)
-            for ch in punctuation:
-                tokens = tokens.replace(ch, ' ' + ch + ' ')
-            tokens = re_sub("\.\.+", ' ' + "\u2026" + ' ', tokens)
-            tokens = re_sub("(\!+\?|\?+\!)[?!]*",
-                            ' ' + "\u203D" + start_tokens, tokens)
-            tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
-            tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
-            tokens = re_sub("((?<![.?!\s])[.?!])",
-                            r" \1" + start_tokens, tokens)
-            tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-            if not self.start_token in tokens:
-                tokens += start_tokens
+        tokens = re_sub(":\)", ' ' + "\u1F601" + ' ', tokens)
+        for ch in punctuation:
+            tokens = tokens.replace(ch, ' ' + ch + ' ')
+        tokens = re_sub("\.\.+", ' ' + "\u2026" + ' ', tokens)
+        tokens = re_sub("(\!+\?|\?+\!)[?!]*",
+                        ' ' + "\u203D" + start_tokens, tokens)
+        tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
+        tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
+        tokens = re_sub("((?<![.?!\s])[.?!])",
+                        r" \1" + start_tokens, tokens)
+        tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
+        if not self.start_token in tokens:
+            tokens += start_tokens
 
+        if (typ == 0) or (typ == 1):
             tmp = list(filter(bool, tokens.strip().split()))
             tokens = []
             for i in range(self.n-1):
                 tokens.append(tmp.pop())
             tokens.extend(tmp)
 
-            self.train_len = len(tokens)
-            return tokens
-
-        elif typ == 1:
-            if sys.version_info < (3,):
-                punctuation = string.punctuation.replace("?", "").replace("'", "")
-                punctuation = punctuation.replace("!", "").replace(".", "")
-                with open(sys.argv[len(sys.argv)-1], 'r') as reviews:
-                    tokens = unicode(reviews.read(), errors='replace')
-
-            else:
-                punctuation = string.punctuation.translate(str.maketrans(
-                                                           "", "", ".?!'"))
-                with open(sys.argv[len(sys.argv)-1], 'r',
-                          errors="replace") as reviews:
-                    tokens = reviews.read()
-
-            if not op:
-                tokens = tokens.lower()
-
-            while self.start_token in tokens:
-                self.start_token += '>'
-            while self.end_token in tokens:
-                self.end_token += '>'
-            while self.unk_token in tokens:
-                self.unk_token += '>'
-
-            start_tokens = ' ' + self.end_token
-            for i in range(self.n-1):
-                start_tokens += ' ' + self.start_token + ' '
-
-            tokens = re_sub(":\)", ' ' + "\u1F601" + ' ', tokens)
-            for ch in punctuation:
-                tokens = tokens.replace(ch, ' ' + ch + ' ')
-            tokens = re_sub("\.\.+", ' ' + "\u2026" + ' ', tokens)
-            tokens = re_sub("(\!+\?|\?+\!)[?!]*",
-                            ' ' + "\u203D" + start_tokens, tokens)
-            tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
-            tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
-            tokens = re_sub("((?<![.?!\s])[.?!])",
-                            r" \1" + start_tokens, tokens)
-            tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-            if not self.start_token in tokens:
-                tokens += start_tokens
-
-            tmp = list(filter(bool, tokens.strip().split()))
-            tokens = []
-            for i in range(self.n-1):
-                tokens.append(tmp.pop())
-            tokens.extend(tmp)
+            if typ == 0:
+                self.train_len = len(tokens)
             return tokens
 
         elif typ == 2:
             zeroSet = []
             oneSet = []
-            with open('reviews.train', 'r') as reviews:
-                for line in reviews.readlines()[1:]:
-                    clas = line[0]
-                    line = line[4:]
-                    if clas == '0':
-                        zeroSet.append(unicode(line, errors='replace'))
-                    else:
-                        oneSet.append(unicode(line, errors='replace'))
 
-                if sys.version_info < (3,):
-                    punctuation = string.punctuation.translate(None, ".?!'")
+            tokens = tokens[-len(begin_tokens):] + tokens[:-len(begin_tokens)]
+            for line in tokens.split('\n')[1:]:
+                clas = line[0]
+                line = line[4:]
+                if clas == '0':
+                    zeroSet.append(line)
                 else:
-                    punctuation = string.punctuation.translate(str.maketrans(
-                                                               "", "", ".?!'"))
-                zeroSet = ' '.join(zeroSet)
-                zeroSet = re_sub(":\)", ' ' + "\u1F601" + ' ', zeroSet)
-                for ch in punctuation:
-                    zeroSet = zeroSet.replace(ch, ' ' + ch + ' ')
-                zeroSet = re_sub("\.\.+", ' ' + "\u2026" + ' ', zeroSet)
-                zeroSet = re_sub("(\!+\?|\?+\!)[?!]*",
-                                 ' ' + "\u203D" + start_tokens, zeroSet)
-                zeroSet = re_sub("\!\!+", " !!" + start_tokens, zeroSet)
-                zeroSet = re_sub("\?\?+", " ??" + start_tokens, zeroSet)
-                zeroSet = re_sub("((?<![.?!\s])[.?!])",
-                                 r" \1" + start_tokens, zeroSet)
-                zeroSet = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s",
-                                 r" \1 ", zeroSet)
-                zeroSet = filter(bool, zeroSet.strip().split())
-                zeroSet.insert(0, zeroSet.pop())
+                    oneSet.append(line)
 
-                oneSet = ' '.join(oneSet)
-                oneSet = re_sub(":\)", ' ' + "\u1F601" + ' ', oneSet)
-                for ch in punctuation:
-                    oneSet = oneSet.replace(ch, ' ' + ch + ' ')
-                oneSet = re_sub("\.\.+", ' ' + "\u2026" + ' ', oneSet)
-                oneSet = re_sub("(\!+\?|\?+\!)[?!]*",
-                                ' ' + "\u203D" + start_tokens, oneSet)
-                oneSet = re_sub("\!\!+", " !!" + start_tokens, oneSet)
-                oneSet = re_sub("\?\?+", " ??" + start_tokens, oneSet)
-                oneSet = re_sub("((?<![.?!\s])[.?!])",
-                                r" \1" + start_tokens, oneSet)
-                oneSet = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", oneSet)
-                oneSet = filter(bool, oneSet.strip().split())
-                oneSet.insert(0, oneSet.pop())
-
-                self.set1_len = len(oneSet)
-                self.set0_len = len(zeroSet)
-                return oneSet, zeroSet
+            return oneSet, zeroSet
 
     """
     Get total counts, and word frequency dictionaries.
@@ -542,30 +460,40 @@ class ngrams:
                 return key
         return key
 
-    def uni_perplex(self, tokens, ts):
+    def uni_perplex(self, tokens, ts,
+                    unigrams=None, train_len=None, uni_ocm=None):
+        if not unigrams:
+            unigrams = self.unigrams
+        if not train_len:
+            train_len = self.train_len
+        if not uni_ocm:
+            uni_ocm = self.uni_ocm
+
         entropy = 0.0
         if ts:
             for token in tokens:
-                entropy -= log10(self.unigrams.get(token,
-                                 self.uni_ocm[self.threshold] /
-                                 self.train_len))
+                entropy -= log10(unigrams.get(token,
+                                 uni_ocm[self.threshold] /
+                                 train_len))
         else:
             for token in tokens:
-                entropy -= log10(self.unigrams.get(token, 1 / self.train_len))
+                entropy -= log10(unigrams.get(token, 1 / train_len))
 
         return 10**(entropy / (len(tokens) - (self.n-1)))
 
-    def bi_perplex(self, tokens, ts):
-        bigrams = self.bigrams
+    def bi_perplex(self, tokens, ts, bigrams=None, tw=None, bi_ocm=None):
+        if not bigrams:
+            bigrams = self.bigrams
+        if not tw:
+            tw = self.total_words
         thresh = self.threshold
-        tw = self.total_words
-        bi_ocm = self.bi_ocm
         ut = self.unk_token
-        V = self.types
-
+        
         entropy = 0.0
         prev_t = tokens[0]
         if ts:
+            if not bi_ocm:
+                bi_ocm = self.bi_ocm
             for token in tokens[1:]:
                 if prev_t in bigrams:
                     entropy -= log10(bigrams[prev_t].get(token,
@@ -575,6 +503,7 @@ class ngrams:
                                      bi_ocm[ut][thresh] / tw[ut]))
                 prev_t = token
         else:
+            V = self.types
             for token in tokens[1:]:
                 if prev_t in bigrams:
                     entropy -= log10(bigrams[prev_t].get(token,
@@ -630,23 +559,6 @@ class ngrams:
                                           self.total_words, n)
 
         return 10**(entropy / (num_tokens - (n-1)))
-
-    """
-    def bi_comp(self, tokens, bigrams, total_words, ocm_bi):
-        perplexity = 0.0
-        prev_token = tokens[0]
-
-        for token in tokens[1:]:
-            if prev_token in bigrams:
-               perplexity += numpy.log(bigrams[prev_token].get(token, ocm_bi[prev_token][self.threshold] /
-                                                                total_words[prev_token]))
-            else:
-                perplexity += numpy.log(bigrams[self.unk_token].get(token, ocm_bi[self.unk_token][self.threshold] /
-                                        total_words[self.unk_token]))
-            prev_token = token
-
-        return numpy.power(1 / numpy.exp(perplexity), 1.0 / len(tokens))
-    """
 
 
 def main():
@@ -744,11 +656,11 @@ def main():
     print("Perplexity: " + str(perplexity))
 
     """
-    (oneSet, zeroSet) = model.processFile(op, 2)
+    oneSet, zeroSet = model.processFile(op, 2)
 
-    (one_bi, one_words, one_ocm) = model.init(op, ts, oneSet)
+    one_bi, one_words, one_ocm = model.init(op, ts, oneSet)
 
-    zero_bi, zero_words, zero_ocm) = model.init(op, ts, zeroSet)
+    zero_bi, zero_words, zero_ocm = model.init(op, ts, zeroSet)
 
 
     predictions = []
@@ -756,20 +668,29 @@ def main():
         for line in reviews.readlines()[1:]:
             line = line[2:]
 
-            line = re.sub(":\)", ' ' + u"\u1F601" + ' ', line) #smileys
-            line = re.sub("\)", " ) ", line)
-            line = re.sub("\(", " ( ", line)
-            line = re.sub(":", " : ", line)
-            line = re.sub(";", " ; ", line)
-            line = re.sub("\.\.+", ' ' + u"\u2026" + ' ', line) #elipsis
-            line = re.sub("\."," . </s> <s> ", line)
-            line = re.sub("([!?]{2,10})+", ' ' + u"\u203D" + " </s> <s> ", line) #interrobang
-            line = re.sub("!!+"," !! </s> <s> ", line)
-            line = re.sub("!"," ! </s> <s> ", line)
-            line = re.sub("\?\?+"," ?? </s> <s> ", line)
-            line = re.sub("\?"," ? </s> <s> ", line).split()
-            line = filter(bool, line)
-            line.insert(0, line.pop())
+            start_tokens = ' ' + self.end_token
+            for i in range(n-1):
+                start_tokens += ' ' + model.start_token + ' '
+
+            tokens = re_sub(":\)", ' ' + "\u1F601" + ' ', tokens)
+            for ch in punctuation:
+                tokens = tokens.replace(ch, ' ' + ch + ' ')
+            tokens = re_sub("\.\.+", ' ' + "\u2026" + ' ', tokens)
+            tokens = re_sub("(\!+\?|\?+\!)[?!]*",
+                            ' ' + "\u203D" + start_tokens, tokens)
+            tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
+            tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
+            tokens = re_sub("((?<![.?!\s])[.?!])",
+                            r" \1" + start_tokens, tokens)
+            tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
+            if not model.start_token in tokens:
+                tokens += start_tokens
+
+            tmp = list(filter(bool, tokens.strip().split()))
+            tokens = []
+            for i in range(n-1):
+                tokens.append(tmp.pop())
+            tokens.extend(tmp)
 
             #compare perplexities
             one_plex = model.bi_comp(line, one_bi, one_words, one_ocm)
@@ -783,7 +704,6 @@ def main():
     with open('kaggle_dump.txt', 'w') as guesses:
         for i,guess in enumerate(predictions):
             guesses.write('%d,%i\n' % (i, guess))
-
     """
 
 if __name__ == '__main__':
