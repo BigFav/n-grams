@@ -39,7 +39,7 @@ class ngrams:
             word_freq_pairs = self.bi_count_pairs(tokens, self.n, unk)
         else:
             word_freq_pairs = self.n_count_pairs(tokens, self.n, unk)
-    
+
         self.types = len(word_freq_pairs)
         return tokens, word_freq_pairs
 
@@ -292,10 +292,7 @@ class ngrams:
     """
     Computes Laplace smoothed probability distributions.
     """
-    def laplace_unigrams(self, word_freq_pairs, total_words=None):
-        if not total_words:
-            total_words = self.total_words
-
+    def laplace_unigrams(self, word_freq_pairs, total_words):
         prob_dict = word_freq_pairs
         dict_len = len(prob_dict)
         for word, count in prob_dict.items():
@@ -303,16 +300,13 @@ class ngrams:
 
         self.unigrams = prob_dict
 
-    def laplace_bigrams(self, word_freq_pairs, total_words=None):
-        if not total_words:
-            total_words = self.total_words
-
+    def laplace_bigrams(self, word_freq_pairs, total_words):
         prob_dict = word_freq_pairs
         dict_len = len(prob_dict)
         for top_word, nxt_lvl_dict in prob_dict.items():
             for bot_word, cnt in nxt_lvl_dict.items():
-                nxt_lvl_dict[bot_word] = ((cnt+1) /
-                                          (total_words[top_word] +  dict_len))
+                nxt_lvl_dict[bot_word] = ((cnt + 1) /
+                                          (total_words[top_word] + dict_len))
         self.bigrams = prob_dict
 
     def laplace_ngrams(self, word_freq_pairs, total_words, n):
@@ -335,7 +329,7 @@ class ngrams:
     Creates a dict of how many times a word of a certain frequency occurs.
     Then gets probabilty distributions from good turing smoothing.
     """
-    def occurrenceToUniTuring(self, word_freq_pairs, total_words=None):
+    def occurrenceToUniTuring(self, word_freq_pairs, total_words):
         occurence_map = OrderedDict.fromkeys(range(1, max(
                                              word_freq_pairs.values())+2), 0)
 
@@ -352,19 +346,17 @@ class ngrams:
             last_val = occurence_map[key]
         self.uni_ocm = occurence_map
 
-        if not total_words:
-            total_words = self.total_words
         self.goodTuringSmoothUni(word_freq_pairs, occurence_map, total_words)
 
     def goodTuringSmoothUni(self, word_freq_pairs, uni_ocm, total_words):
         prob_dict = word_freq_pairs
         for word, count in prob_dict.items():
             prob_dict[word] = ((count+1) * uni_ocm[count+1] / uni_ocm[count] /
-                              total_words)
+                               total_words)
 
         self.unigrams = prob_dict
 
-    def occurrenceToBiTuring(self, word_freq_pairs, total_words=None):
+    def occurrenceToBiTuring(self, word_freq_pairs, total_words):
         unk_token = self.unk_token
         occurence_map = dict.fromkeys(word_freq_pairs.keys())
         for word, nxt_lvl_dict in word_freq_pairs.items():
@@ -399,10 +391,8 @@ class ngrams:
                 if not value:
                     occurence_map[word][key] = last_val
                 last_val = occurence_map[word][key]
-
         self.bi_ocm = occurence_map
-        if not total_words:
-            total_words = self.total_words
+
         self.goodTuringSmoothBi(word_freq_pairs, total_words, occurence_map)
 
     def goodTuringSmoothBi(self, word_freq_pairs, total_words, bi_ocm):
@@ -588,9 +578,9 @@ def finish_model(model, n, ts, word_freq_pairs, total_words):
             model.occurrenceToBiTuring(word_freq_pairs, total_words)
     else:
         if n == 1:
-            model.laplace_unigrams(word_freq_pairs)
+            model.laplace_unigrams(word_freq_pairs, total_words)
         elif n == 2:
-            model.laplace_bigrams(word_freq_pairs)
+            model.laplace_bigrams(word_freq_pairs, total_words)
         else:
             model.laplace_ngrams(word_freq_pairs, total_words, n)
 
@@ -671,7 +661,7 @@ def main():
             zero_words = len(zeroSet)
             one_freq_pairs = model.uni_count_pairs(oneSet, n, True)
             one_words = len(oneSet)
-            
+
             finish_model(model, n, ts, zero_freq_pairs, zero_words)
             zero_n = model.unigrams
             zero_ocm = model.uni_ocm
@@ -701,7 +691,7 @@ def main():
             zero_words = model.total_words
             one_freq_pairs = model.n_count_pairs(oneSet, n, True)
             one_words = model.total_words
-            
+
             finish_model(model, n, ts, zero_freq_pairs, zero_words)
             zero_n = model.ngrams
 
@@ -720,7 +710,7 @@ def main():
                                     zero_ocm, len(zero_n))
             one_plex = perplex_fun(line, ts, one_n, one_words,
                                    one_ocm, len(one_n))
-            
+
             guess = neg_class if zero_plex <= one_plex else '1'
             predictions.append(guess)
 
