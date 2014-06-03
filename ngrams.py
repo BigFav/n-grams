@@ -662,37 +662,43 @@ def main():
             zero_words = len(zeroSet)
             one_freq_pairs = model.uni_count_pairs(oneSet, n, True)
             one_words = len(oneSet)
+            
+            finish_model(model, n, ts, zero_freq_pairs, zero_words)
+            zero_n = model.unigrams
+            zero_ocm = model.uni_ocm
+
+            finish_model(model, n, ts, one_freq_pairs, one_words)
+            one_n = model.unigrams
+            one_ocm = model.uni_ocm
+
+            perplex_fun = model.uni_perplex
         elif n == 2:
             zero_freq_pairs = model.bi_count_pairs(zeroSet, n, True)
             zero_words = model.total_words
             one_freq_pairs = model.bi_count_pairs(oneSet, n, True)
             one_words = model.total_words
+
+            finish_model(model, n, ts, zero_freq_pairs, zero_words)
+            zero_n = model.bigrams
+            zero_ocm = model.bi_ocm
+
+            finish_model(model, n, ts, one_freq_pairs, one_words)
+            one_n = model.bigrams
+            one_ocm = model.bi_ocm
+
+            perplex_fun = model.bi_perplex
         else:
             zero_freq_pairs = model.n_count_pairs(zeroSet, n, True)
             zero_words = model.total_words
             one_freq_pairs = model.n_count_pairs(oneSet, n, True)
             one_words = model.total_words
-        finish_model(model, n, ts, zero_freq_pairs, zero_words)
-        if n == 1:
-            zero_n = model.unigrams
-            zero_ocm = model.uni_ocm
-        elif n == 2:
-            zero_n = model.bigrams
-            zero_ocm = model.bi_ocm
-        else:
+            
+            finish_model(model, n, ts, zero_freq_pairs, zero_words)
             zero_n = model.ngrams
 
-        finish_model(model, n, ts, one_freq_pairs, one_words)
-        if n == 1:
-            one_n = model.unigrams
-            one_ocm = model.uni_ocm
-            perplex_fun = model.uni_perplex
-        elif n == 2:
-            one_n = model.bigrams
-            one_ocm = model.bi_ocm
-            perplex_fun = model.bi_perplex
-        else:
+            finish_model(model, n, ts, one_freq_pairs, one_words)
             one_n = model.ngrams
+
             perplex_fun = model.n_laplace_perplex_help
 
         predictions = []
