@@ -590,24 +590,23 @@ def main():
     # Flag and argument upkeep
     op = 0
     n = "-n" in sys.argv
+    ls = "-ls" in sys.argv
+    perplex = '-p' in sys.argv
+    classify = "--classify" in sys.argv
     if n:
         n = int(sys.argv[sys.argv.index("-n") + 1])
         if n == 1:
             op = 0
             ts = "-ts" in sys.argv
-            ls = "-ls" in sys.argv
         elif n == 2:
             op = 1
             ts = "-ts" in sys.argv
-            ls = "-ls" in sys.argv
         else:
             op = 2
             ts = False
-            ls = "-ls" in sys.argv
     else:
         n = 2
         ts = "-ts" in sys.argv
-        ls = "-ls" in sys.argv
         op = 0 if "-u" in sys.argv else 1
 
     model = ngrams(n)
@@ -622,11 +621,11 @@ def main():
             model.unsmoothed_ngrams(word_freq_pairs, model.total_words, n)
 
         model.generateSentence(op) if op < 2 else model.generateNgramSentence()
-        if not (ts or ls):
+        if not (perplex or classify):
             sys.exit(0)
 
     # only want perplexity
-    else:
+    elif perplex and not classify:
         finish_model(model, n, ts, word_freq_pairs, model.total_words)
         tokens = model.processFile(op, 1)
         if n == 1:
@@ -638,25 +637,25 @@ def main():
         print("Perplexity: " + str(perplexity))
         sys.exit(0)
 
-    # want both
-    if op == 0:
-        word_freq_pairs = model.uni_count_pairs(tokens, n, True)
-    elif op == 1:
-        word_freq_pairs = model.bi_count_pairs(tokens, n, True)
-    else:
-        word_freq_pairs = model.n_count_pairs(tokens, n, True)
+    if perplex:
+        if op == 0:
+            word_freq_pairs = model.uni_count_pairs(tokens, n, True)
+        elif op == 1:
+            word_freq_pairs = model.bi_count_pairs(tokens, n, True)
+        else:
+            word_freq_pairs = model.n_count_pairs(tokens, n, True)
 
-    finish_model(model, n, ts, word_freq_pairs, model.total_words)
-    tokens = model.processFile(op, 1)
-    if n == 1:
-        perplexity = model.uni_perplex(tokens, ts)
-    elif n == 2:
-        perplexity = model.bi_perplex(tokens, ts)
-    else:
-        perplexity = model.n_laplace_perplex_help(tokens, n)
-    print("Perplexity: " + str(perplexity))
+        finish_model(model, n, ts, word_freq_pairs, model.total_words)
+        tokens = model.processFile(op, 1)
+        if n == 1:
+            perplexity = model.uni_perplex(tokens, ts)
+        elif n == 2:
+            perplexity = model.bi_perplex(tokens, ts)
+        else:
+            perplexity = model.n_laplace_perplex_help(tokens, n)
+        print("Perplexity: " + str(perplexity))
 
-    if "--classify" in sys.argv:
+    if classify:
         zeroSet, oneSet, neg_class = model.processFile(op, 2)
         if n == 1:
             zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
