@@ -39,13 +39,13 @@ class ngrams:
             word_freq_pairs = self.bi_count_pairs(tokens, self.n, unk)
         else:
             word_freq_pairs = self.n_count_pairs(tokens, self.n, unk)
-
+    
         self.types = len(word_freq_pairs)
         return tokens, word_freq_pairs
 
     def processFile(self, op, typ):
         tokens = ""
-        f_num = 1 if typ == 1 else 2
+        f_num = 1 if typ % 2 else 2
         if sys.version_info < (3,):
             punctuation = string.punctuation.replace("?", "").replace("'", "")
             punctuation = punctuation.replace("!", "").replace(".", "")
@@ -59,7 +59,7 @@ class ngrams:
                       errors="replace") as reviews:
                 tokens = reviews.read()
 
-        if not op:
+        if self.n == 1:
             tokens = tokens.lower()
 
         # Ensure these tokens aren't in the text
@@ -87,34 +87,41 @@ class ngrams:
         tokens = re_sub("((?<![.?!\s])[.?!])",
                         r" \1" + start_tokens, tokens)
         tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-        if not self.start_token in tokens:
-            tokens += start_tokens
+        if self.end_token not in tokens:
+            tokens += start_tokens if self.n > 1 else self.end_token
+        tokens = tokens.strip()
 
-        if (typ == 0) or (typ == 1):
-            tmp = list(filter(bool, tokens.strip().split()))
+        if typ < 2:
+            tmp = list(filter(bool, tokens.split()))
             tokens = []
             for i in range(self.n-1):
                 tokens.append(tmp.pop())
             tokens.extend(tmp)
 
-            if typ == 0:
+            if not typ:
                 self.train_len = len(tokens)
             return tokens
 
         elif typ == 2:
             zeroSet = []
             oneSet = []
-
             tokens = tokens[-len(begin_tokens):] + tokens[:-len(begin_tokens)]
-            for line in tokens.split('\n')[1:]:
+            tokens = tokens.split('\n')
+            del tokens[0]
+            for line in tokens:
                 clas = line[0]
-                line = line[4:]
-                if clas == '0':
-                    zeroSet.append(line)
+                line = line[8:]
+                if clas != '1':  # sometimes 0 and sometimes -1
+                    zeroSet.extend(line.split())
                 else:
-                    oneSet.append(line)
+                    oneSet.extend(line.split())
 
-            return oneSet, zeroSet
+            for line in tokens:
+                if line[0] != 1:
+                    return zeroSet, oneSet, line[0]
+            sys.exit("Only one class in the training set. Exiting now.")
+
+        return tokens[-len(begin_tokens):] + tokens[:-len(begin_tokens)]
 
     """
     Get total counts, and word frequency dictionaries.
@@ -216,7 +223,7 @@ class ngrams:
     def n_count_pairs(self, tokens, n, unk):
         if unk:
             self.total_words = Counter(tokens)
-            self.total_words[self.unk_token] = 0.0
+            self.total_words[self.unk_token] = 0
 
             unk_words = set()
             for word, count in self.total_words.items():
@@ -460,35 +467,37 @@ class ngrams:
                 return key
         return key
 
-    def uni_perplex(self, tokens, ts,
-                    unigrams=None, train_len=None, uni_ocm=None):
+    def uni_perplex(self, tokens, ts, unigrams=None,
+                    train_len=None, uni_ocm=None, V=None):
         if not unigrams:
             unigrams = self.unigrams
         if not train_len:
             train_len = self.train_len
-        if not uni_ocm:
-            uni_ocm = self.uni_ocm
 
         entropy = 0.0
         if ts:
+            if not uni_ocm:
+                uni_ocm = self.uni_ocm
             for token in tokens:
                 entropy -= log10(unigrams.get(token,
-                                 uni_ocm[self.threshold] /
-                                 train_len))
+                                 uni_ocm[self.threshold] / train_len))
         else:
+            if not V:
+                V = self.types
             for token in tokens:
-                entropy -= log10(unigrams.get(token, 1 / train_len))
+                entropy -= log10(unigrams.get(token, 1 / (train_len + V)))
 
         return 10**(entropy / (len(tokens) - (self.n-1)))
 
-    def bi_perplex(self, tokens, ts, bigrams=None, tw=None, bi_ocm=None):
-        if not bigrams:
-            bigrams = self.bigrams
+    def bi_perplex(self, tokens, ts, bigrams=None,
+                   tw=None, bi_ocm=None, V=None):
+        ut = self.unk_token
+        thresh = self.threshold
         if not tw:
             tw = self.total_words
-        thresh = self.threshold
-        ut = self.unk_token
-        
+        if not bigrams:
+            bigrams = self.bigrams
+
         entropy = 0.0
         prev_t = tokens[0]
         if ts:
@@ -503,7 +512,8 @@ class ngrams:
                                      bi_ocm[ut][thresh] / tw[ut]))
                 prev_t = token
         else:
-            V = self.types
+            if not V:
+                V = self.types
             for token in tokens[1:]:
                 if prev_t in bigrams:
                     entropy -= log10(bigrams[prev_t].get(token,
@@ -561,6 +571,21 @@ class ngrams:
         return 10**(entropy / (num_tokens - (n-1)))
 
 
+def finish_model(model, n, ts, word_freq_pairs, total_words):
+    if ts:
+        if n == 1:
+            model.occurrenceToUniTuring(word_freq_pairs)
+        else:
+            model.occurrenceToBiTuring(word_freq_pairs)
+    else:
+        if n == 1:
+            model.laplace_unigrams(word_freq_pairs)
+        elif n == 2:
+            model.laplace_bigrams(word_freq_pairs)
+        else:
+            model.laplace_ngrams(word_freq_pairs, total_words, n)
+
+
 def main():
     # Flag and argument upkeep
     op = 0
@@ -577,13 +602,13 @@ def main():
             ls = "-ls" in sys.argv
         else:
             op = 2
-            ls = "-ls" in sys.argv
             ts = False
+            ls = "-ls" in sys.argv
     else:
-        op = 0 if "-u" in sys.argv else 1
         n = 2
         ts = "-ts" in sys.argv
         ls = "-ls" in sys.argv
+        op = 0 if "-u" in sys.argv else 1
 
     model = ngrams(n)
     tokens, word_freq_pairs = model.init(op, ts, None)
@@ -602,19 +627,7 @@ def main():
 
     # only want perplexity
     else:
-        if ts:
-            if op:
-                model.occurrenceToBiTuring(word_freq_pairs)
-            else:
-                model.occurrenceToUniTuring(word_freq_pairs)
-        else:
-            if n == 1:
-                model.laplace_unigrams(word_freq_pairs)
-            elif n == 2:
-                model.laplace_bigrams(word_freq_pairs)
-            else:
-                model.laplace_ngrams(word_freq_pairs, model.total_words, n)
-
+        finish_model(model, n, ts, word_freq_pairs, model.total_words)
         tokens = model.processFile(op, 1)
         if n == 1:
             perplexity = model.uni_perplex(tokens, ts)
@@ -633,19 +646,7 @@ def main():
     else:
         word_freq_pairs = model.n_count_pairs(tokens, n, True)
 
-    if ts:
-        if op:
-            model.occurrenceToBiTuring(word_freq_pairs)
-        else:
-            model.occurrenceToUniTuring(word_freq_pairs)
-    else:
-        if n == 1:
-            model.laplace_unigrams(word_freq_pairs)
-        elif n == 2:
-            model.laplace_bigrams(word_freq_pairs)
-        else:
-            model.laplace_ngrams(word_freq_pairs, model.total_words, n)
-
+    finish_model(model, n, ts, word_freq_pairs, model.total_words)
     tokens = model.processFile(op, 1)
     if n == 1:
         perplexity = model.uni_perplex(tokens, ts)
@@ -655,56 +656,62 @@ def main():
         perplexity = model.n_laplace_perplex_help(tokens, n)
     print("Perplexity: " + str(perplexity))
 
-    """
-    oneSet, zeroSet = model.processFile(op, 2)
+    if "--classify" in sys.argv:
+        zeroSet, oneSet, neg_class = model.processFile(op, 2)
+        if n == 1:
+            zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
+            zero_words = len(zeroSet)
+            one_freq_pairs = model.uni_count_pairs(oneSet, n, True)
+            one_words = len(oneSet)
+        elif n == 2:
+            zero_freq_pairs = model.bi_count_pairs(zeroSet, n, True)
+            zero_words = model.total_words
+            one_freq_pairs = model.bi_count_pairs(oneSet, n, True)
+            one_words = model.total_words
+        else:
+            zero_freq_pairs = model.n_count_pairs(zeroSet, n, True)
+            zero_words = model.total_words
+            one_freq_pairs = model.n_count_pairs(oneSet, n, True)
+            one_words = model.total_words
+        finish_model(model, n, ts, zero_freq_pairs, zero_words)
+        if n == 1:
+            zero_n = model.unigrams
+            zero_ocm = model.uni_ocm
+        elif n == 2:
+            zero_n = model.bigrams
+            zero_ocm = model.bi_ocm
+        else:
+            zero_n = model.ngrams
 
-    one_bi, one_words, one_ocm = model.init(op, ts, oneSet)
+        finish_model(model, n, ts, one_freq_pairs, one_words)
+        if n == 1:
+            one_n = model.unigrams
+            one_ocm = model.uni_ocm
+            perplex_fun = model.uni_perplex
+        elif n == 2:
+            one_n = model.bigrams
+            one_ocm = model.bi_ocm
+            perplex_fun = model.bi_perplex
+        else:
+            one_n = model.ngrams
+            perplex_fun = model.n_laplace_perplex_help
 
-    zero_bi, zero_words, zero_ocm = model.init(op, ts, zeroSet)
+        predictions = []
+        tokens = model.processFile(op, 3)
+        for line in filter(bool, tokens.split('\n')[1:]):
+            line = line[8:].split()
 
+            # Compare perplexities
+            zero_plex = perplex_fun(line, ts, zero_n, zero_words,
+                                    zero_ocm, len(zero_n))
+            one_plex = perplex_fun(line, ts, one_n, one_words,
+                                   one_ocm, len(one_n))
+            
+            guess = neg_class if zero_plex <= one_plex else '1'
+            predictions.append(guess)
 
-    predictions = []
-    with open(sys.argv[len(sys.argv)-1]+'.test', 'r') as reviews:
-        for line in reviews.readlines()[1:]:
-            line = line[2:]
-
-            start_tokens = ' ' + self.end_token
-            for i in range(n-1):
-                start_tokens += ' ' + model.start_token + ' '
-
-            tokens = re_sub(":\)", ' ' + "\u1F601" + ' ', tokens)
-            for ch in punctuation:
-                tokens = tokens.replace(ch, ' ' + ch + ' ')
-            tokens = re_sub("\.\.+", ' ' + "\u2026" + ' ', tokens)
-            tokens = re_sub("(\!+\?|\?+\!)[?!]*",
-                            ' ' + "\u203D" + start_tokens, tokens)
-            tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
-            tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
-            tokens = re_sub("((?<![.?!\s])[.?!])",
-                            r" \1" + start_tokens, tokens)
-            tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-            if not model.start_token in tokens:
-                tokens += start_tokens
-
-            tmp = list(filter(bool, tokens.strip().split()))
-            tokens = []
-            for i in range(n-1):
-                tokens.append(tmp.pop())
-            tokens.extend(tmp)
-
-            #compare perplexities
-            one_plex = model.bi_comp(line, one_bi, one_words, one_ocm)
-            zero_plex = model.bi_comp(line, zero_bi, zero_words, zero_ocm)
-
-            if zero_plex <= one_plex:
-                predictions.append(0)
-            else:
-                predictions.append(1)
-
-    with open('kaggle_dump.txt', 'w') as guesses:
-        for i,guess in enumerate(predictions):
-            guesses.write('%d,%i\n' % (i, guess))
-    """
+        with open('kaggle_dump1.txt', 'w') as guesses:
+            guesses.write('\n'.join(predictions))
 
 if __name__ == '__main__':
     main()
