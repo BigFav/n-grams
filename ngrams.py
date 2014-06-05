@@ -46,14 +46,15 @@ class Ngrams:
         self.train_len = None
         self.types = None
         self.n = n
+        self.start_index = None
+        self.feature_num = None
 
-    def init(self, n, ts, tokens, unk):
+    def init(self, n, ts, unk, string=None):
         self.bigrams = None
         self.bi_ocm = None
         self.total_words = None
 
-        if not tokens:
-            tokens = self.processFile(n, 0)
+        tokens, string = self.processFile(n, 0, string)
 
         if n == 1:
             word_freq_pairs = self.uni_count_pairs(tokens, n, unk)
@@ -63,10 +64,9 @@ class Ngrams:
             word_freq_pairs = self.n_count_pairs(tokens, n, unk)
 
         self.types = len(word_freq_pairs)
-        return tokens, word_freq_pairs, self.total_words
+        return string, word_freq_pairs, self.total_words
 
-    def processFile(self, n, typ):
-        tokens = ""
+    def parse_file(self, n, typ, begin_tokens):
         f_num = 1 if typ % 2 else 2
         if sys.version_info < (3,):
             punctuation = string.punctuation.replace("?", "").replace("'", "")
@@ -92,11 +92,7 @@ class Ngrams:
         while self.unk_token in tokens:
             self.unk_token += '>'
 
-        begin_tokens = ""
         start_tokens = ' ' + self.end_token
-        for i in range(n-1):
-            begin_tokens += ' ' + self.start_token + ' '
-        begin_tokens = begin_tokens[:-1]
         start_tokens += begin_tokens
 
         tokens = re_sub(":\)", " \u1F601 ", tokens)
@@ -110,12 +106,32 @@ class Ngrams:
         tokens = re_sub("((?<![.?!\s])[.?!])",
                         r" \1" + start_tokens, tokens)
         tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
+        if "--classify" in sys.argv:
+            x = tokens.partition('\n')[0].count(',')
+            if not x:
+                sys.exit("File doesn't have classes defined. Cannot classify.")
+            x = self.start_index = int((3*x) + x*(x-1)/2)
+            tokens = re_sub(" <s>\n([^\n]{%i})" % x,
+                            r"\n\1" + begin_tokens, tokens)
+        else:
+            tokens = re_sub("\n([^\n])", r" \1", tokens)
+            
         if self.end_token not in tokens:
             tokens += start_tokens if n > 1 else self.end_token
 
+        return tokens
+
+    def processFile(self, n, typ, string=None):
+        begin_tokens = ""
+        for i in range(n-1):
+            begin_tokens += ' ' + self.start_token + ' '
+        begin_tokens = begin_tokens[:-1]
+
+        if not string:
+            string = self.parse_file(n, typ, begin_tokens)
+
         if typ < 2:
-            tokens = re_sub("\n([^\n])", r" \1", tokens)
-            tmp = list(filter(bool, tokens.split()))
+            tmp = list(filter(bool, string.split()))
             tokens = []
             for i in range(n-1):
                 tokens.append(tmp.pop())
@@ -123,21 +139,22 @@ class Ngrams:
 
             if not typ:
                 self.train_len = len(tokens)
-            return tokens
+            return tokens, string
 
-        tokens = re_sub(" <s>\n([^\n]{7})", r"\n\1" + begin_tokens, tokens) 
-        tokens = tokens[-len(begin_tokens):] + tokens[:-len(begin_tokens)]
-        tokens = tokens.split('\n')
+        string = string[-len(begin_tokens):] + string[:-len(begin_tokens)]
+        tokens = list(filter(bool, string.split('\n')))
         del tokens[:2]
-        tokens[0] = tokens[0][:7] + begin_tokens + tokens[0][7:]
+        x = self.start_index
+        tokens[0] = tokens[0][:x] + begin_tokens + tokens[0][x:]
+
         if typ != 2:
             return tokens
 
         zeroSet = []
         oneSet = []
         for line in tokens:
-            clas = line[0]
-            line = line[8:]
+            clas = line[self.feature_num]
+            line = line[x+1:]
             if clas != '1':  # sometimes 0 and sometimes -1
                 zeroSet.extend(line.split())
             else:
@@ -146,9 +163,12 @@ class Ngrams:
         neg_flag = 0
         pos_flag = 0
         for line in tokens:
-            if not neg_flag and (line[0] != 1):
-                neg_class = line[0]
-                neg_flag = 1
+            if not neg_flag and (line[self.feature_num] != 1):
+                neg_class = line[self.feature_num]
+                if (neg_class == 0) or (neg_class == -1):
+                    neg_flag = 1
+                else:
+                    sys.exit("Negative class value must be 0 or -1.")
             elif not pos_flag:
                 pos_flag = 1
             if neg_flag & pos_flag:
@@ -438,18 +458,18 @@ class Ngrams:
     Generates sentences based on probability distributions.
     """
     def generateSentence(self, n):
-        n -= 1
         sentence = []
         word = self.start_token
-
-        word = self.weightedPickBi(word) if n else self.weightedPickUni()
+        next_word_fun = self.weightedPickBi if n == 2 else self.weightedPickUni
+        
+        word = next_word_fun(word)
         while word != self.end_token:
             sentence.append(word)
-            word = self.weightedPickBi(word) if n else self.weightedPickUni()
+            word = next_word_fun(word)
 
         print(' '.join(sentence))
 
-    def weightedPickUni(self):
+    def weightedPickUni(self, _=None):
         s = 0.0
         key = ""
         r = rand_uniform(0, sum(self.unigrams.values()))
@@ -587,6 +607,7 @@ class Ngrams:
                                ngram=None, tw=None, types=None):
         #sum_dict = {}
         if not ngram:
+            types = self.types
             ngram = self.ngrams
             tw = self.total_words
 
@@ -620,7 +641,7 @@ def finish_model(model, n, ts, word_freq_pairs, total_words):
 def main():
     # Flag and argument upkeep
     op = 0
-    tokens = 0
+    train_str = test_str = 0
     n = "-n" in sys.argv
     ls = "-ls" in sys.argv
     perplex = "-p" in sys.argv
@@ -644,7 +665,7 @@ def main():
     model = Ngrams(n)
 
     if "-sent" in sys.argv:
-        tokens, word_freq_pairs, total_words = model.init(n, ts, tokens, 0)
+        train_str, word_freq_pairs, total_words = model.init(n, ts, 0)
         if op == 0:
             model.unsmoothed_unigrams(word_freq_pairs)
         elif op == 1:
@@ -655,21 +676,23 @@ def main():
         model.generateSentence(n) if n <= 2 else model.generateNgramSentence()
 
     if perplex:
-        tokens, word_freq_pairs, total_words = model.init(n, ts, tokens, 1)
+        train_str, word_freq_pairs, total_words = model.init(n, ts, 1,
+                                                             train_str)
         finish_model(model, n, ts, word_freq_pairs, total_words)
-        tokens = model.processFile(n, 1)
+        test_t, test_str = model.processFile(n, 1, None)
         if n == 1:
-            perplexity = model.uni_perplex(tokens, ts)
+            perplexity = model.uni_perplex(test_t, ts)
         elif n == 2:
-            perplexity = model.bi_perplex(tokens, ts)
+            perplexity = model.bi_perplex(test_t, ts)
         else:
-            perplexity = model.n_laplace_perplex_help(tokens, n)
+            perplexity = model.n_laplace_perplex_help(test_t, n)
 
         print("Perplexity: " + str(perplexity))
 
     if classify:
         t_arg = Wrapper()
-        zeroSet, oneSet, neg_class = model.processFile(n, 2)
+        model.feature_num = 1 - 1
+        zeroSet, oneSet, neg_class = model.processFile(n, 2, train_str)
         if n == 1:
             zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
             zero_types = len(zero_freq_pairs)
@@ -727,9 +750,9 @@ def main():
             one_args = (t_arg, n, one_n, one_words, one_types)
 
         predictions = []
-        tokens = model.processFile(n, 3)
-        for line in tokens:
-            t_arg.set_datum(line[7:].split())
+        test_t = model.processFile(n, 3, test_str)
+        for line in test_t:
+            t_arg.set_datum(line[model.start_index:].split())
 
             # Compare perplexities
             zero_plex = perplex_fun(*zero_args)
@@ -738,7 +761,7 @@ def main():
             guess = neg_class if zero_plex <= one_plex else '1'
             predictions.append(guess)
 
-        with open('kaggle_dump2.txt', 'w') as guesses:
+        with open('kaggle_dump3.txt', 'w') as guesses:
             guesses.write('\n'.join(predictions))
    
 if __name__ == '__main__':
