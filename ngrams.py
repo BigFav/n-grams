@@ -1,4 +1,5 @@
 from __future__ import division, unicode_literals
+import argparse
 import sys
 import string
 from copy import copy
@@ -32,7 +33,7 @@ class Wrapper:
 
 
 class Ngrams:
-    def __init__(self, n):
+    def __init__(self, opts):
         self.threshold = 1  # freq of words considered unknown
         self.start_token = "<s>"
         self.end_token = "</s>"
@@ -45,11 +46,12 @@ class Ngrams:
         self.total_words = None
         self.train_len = None
         self.types = None
-        self.n = n
+        self.n = opts.n
         self.start_index = None
         self.feature_num = None
+        self.opts = opts
 
-    def init(self, n, ts, unk, string=None):
+    def init(self, n, unk, string=None):
         self.bigrams = None
         self.bi_ocm = None
         self.total_words = None
@@ -67,19 +69,18 @@ class Ngrams:
         return string, word_freq_pairs, self.total_words
 
     def parse_file(self, n, typ, begin_tokens):
-        f_num = 1 if typ % 2 else 2
+        filename = self.opts.test_set if typ % 2 else self.opts.training_set
         if sys.version_info < (3,):
             punctuation = string.punctuation.replace("?", "").replace("'", "")
             punctuation = punctuation.replace("!", "").replace(".", "")
-            with open(sys.argv[len(sys.argv)-f_num], 'r') as reviews:
-                tokens = unicode(reviews.read(), errors='replace')
+            with open(filename, 'r') as text:
+                tokens = unicode(text.read(), errors='replace')
 
         else:
             punctuation = string.punctuation.translate(str.maketrans(
                                                        "", "", ".?!'"))
-            with open(sys.argv[len(sys.argv)-f_num], 'r',
-                      errors="replace") as reviews:
-                tokens = reviews.read()
+            with open(filename, 'r', errors="replace") as text:
+                tokens = text.read()
 
         if n == 1:
             tokens = tokens.lower()
@@ -106,16 +107,17 @@ class Ngrams:
         tokens = re_sub("((?<![.?!\s])[.?!])",
                         r" \1" + start_tokens, tokens)
         tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-        if "--classify" in sys.argv:
+        if self.opts.classify:
             x = tokens.partition('\n')[0].count(',')
             if not x:
-                sys.exit("File doesn't have classes defined. Cannot classify.")
+                sys.exit("1st line of the file doesn't have classes defined. "
+                         "Cannot classify. Ex: 'class1,class2,text'.")
             x = self.start_index = int((3*x) + x*(x-1)/2)
             tokens = re_sub(" <s>\n([^\n]{%i})" % x,
                             r"\n\1" + begin_tokens, tokens)
         else:
-            tokens = re_sub("\n([^\n])", r" \1", tokens)
-            
+            tokens = re_sub("\n(?=[^\n])", " ", tokens)
+
         if self.end_token not in tokens:
             tokens += start_tokens if n > 1 else self.end_token
 
@@ -162,10 +164,13 @@ class Ngrams:
 
         neg_flag = 0
         pos_flag = 0
+        ft_num = self.feature_num
         for line in tokens:
-            if not neg_flag and (line[self.feature_num] != 1):
-                neg_class = line[self.feature_num]
-                if (neg_class == 0) or (neg_class == -1):
+            if not neg_flag and (line[ft_num] != 1):
+                neg_class = line[ft_num]
+                if ((neg_class == '0') or
+                    (neg_class == '-' and line[ft_num+1] == '1' and
+                     line[ft_num+2] == ' ')):
                     neg_flag = 1
                 else:
                     sys.exit("Negative class value must be 0 or -1.")
@@ -461,7 +466,7 @@ class Ngrams:
         sentence = []
         word = self.start_token
         next_word_fun = self.weightedPickBi if n == 2 else self.weightedPickUni
-        
+
         word = next_word_fun(word)
         while word != self.end_token:
             sentence.append(word)
@@ -518,14 +523,14 @@ class Ngrams:
                 return key
         return key
 
-    def uni_perplex(self, tokens, ts, unigrams=None,
+    def uni_perplex(self, tokens, gts, unigrams=None,
                     train_len=None, uni_ocm=None, V=None):
         if not unigrams:
             unigrams = self.unigrams
             train_len = self.train_len
 
         entropy = 0.0
-        if ts:
+        if gts:
             if not uni_ocm:
                 uni_ocm = self.uni_ocm
             for token in tokens:
@@ -539,7 +544,7 @@ class Ngrams:
 
         return 10**(entropy / (len(tokens) - (self.n-1)))
 
-    def bi_perplex(self, tokens, ts, bigrams=None,
+    def bi_perplex(self, tokens, gts, bigrams=None,
                    tw=None, bi_ocm=None, V=None):
         if not tw:
             tw = self.total_words
@@ -549,7 +554,7 @@ class Ngrams:
         thresh = self.threshold
         entropy = 0.0
         prev_t = tokens[0]
-        if ts:
+        if gts:
             if not bi_ocm:
                 bi_ocm = self.bi_ocm
             for token in tokens[1:]:
@@ -623,8 +628,64 @@ class Ngrams:
         return 10**(entropy / (num_tokens - (n-1)))
 
 
-def finish_model(model, n, ts, word_freq_pairs, total_words):
-    if ts:
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("-n", type=int, default=2,
+                        help="Size of the probability tuples.")
+    parser.add_argument("-sent", "--sentence", action="store_true",
+                        help="Generate sentence based on unsmoothed "
+                             "n-grams of the training set.")
+
+    smoothing_types = parser.add_mutually_exclusive_group()
+    smoothing_types.add_argument("-ls", "--laplace", action="store_true",
+                                 help="Use Laplace (Additive) smoothing. "
+                                      "This is the default.")
+    smoothing_types.add_argument("-gts", "--turing", action="store_true",
+                                 help="Use Good Turing smoothing.")
+
+    parser.add_argument("-p", "--perplexity", action="store_true",
+                        help="Compute the perplexity of the test set, "
+                             "trained on the training set.")
+    parser.add_argument("-c", "--classify", metavar='FEATURE_NUM', nargs='?',
+                        default="",
+                        help="Binary classify the text based on perplexity on "
+                             "the specified feature number (1 by default). "
+                             "Ex: feature1,feature2,...")
+
+    parser.add_argument("output_file", action="store", nargs='?')
+    parser.add_argument("training_set", action="store")
+    parser.add_argument("test_set", action="store", nargs='?')
+
+    parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n\t\t [-h] "
+                    "[-n N] [-sent] [-ls | -gts] [-p] [-c [FEATURE_NUM] "
+                    "output_file] training_set test_set")
+
+    opts = parser.parse_args()
+    if opts.classify.isdigit():
+        opts.classify = int(opts.classify)
+    if opts.classify and opts.output_file and not opts.test_set:
+        opts.test_set = opts.training_set
+        opts.training_set = opts.output_file
+        opts.output_file = opts.classify
+        opts.classify = True
+    elif (not opts.classify and opts.output_file and
+          not(opts.test_set and opts.training_set)):
+        # Only flip files if they are missing, otherwise ignore
+        opts.test_set = opts.training_set
+        opts.training_set = opts.output_file
+    elif opts.classify and not opts.output_file:
+        parser.error("Must input an output file when performing binary "
+                     "classification.")
+    if (opts.perplexity or opts.classify) and not opts.test_set:
+        parser.error("Must input a test set, if performing perplexity based "
+                     "operations (-p and -c).")
+
+    return opts
+
+
+def finish_model(model, n, gts, word_freq_pairs, total_words):
+    if gts:
         if n == 1:
             model.occurrenceToUniTuring(word_freq_pairs, total_words)
         else:
@@ -639,59 +700,39 @@ def finish_model(model, n, ts, word_freq_pairs, total_words):
 
 
 def main():
-    # Flag and argument upkeep
-    op = 0
+    opts = parse_args()
+    n = opts.n
+    gts = opts.turing
     train_str = test_str = 0
-    n = "-n" in sys.argv
-    ls = "-ls" in sys.argv
-    perplex = "-p" in sys.argv
-    classify = "--classify" in sys.argv
-    if n:
-        n = int(sys.argv[sys.argv.index("-n") + 1])
+
+    model = Ngrams(opts)
+    if opts.sentence:
+        train_str, word_freq_pairs, total_words = model.init(n, 0)
         if n == 1:
-            op = 0
-            ts = "-ts" in sys.argv
-        elif n == 2:
-            op = 1
-            ts = "-ts" in sys.argv
-        else:
-            op = 2
-            ts = False
-    else:
-        n = 2
-        ts = "-ts" in sys.argv
-        op = 0 if "-u" in sys.argv else 1
-
-    model = Ngrams(n)
-
-    if "-sent" in sys.argv:
-        train_str, word_freq_pairs, total_words = model.init(n, ts, 0)
-        if op == 0:
             model.unsmoothed_unigrams(word_freq_pairs)
-        elif op == 1:
+        elif n == 2:
             model.unsmoothed_bigrams(word_freq_pairs)
         else:
             model.unsmoothed_ngrams(word_freq_pairs, total_words, n)
 
         model.generateSentence(n) if n <= 2 else model.generateNgramSentence()
 
-    if perplex:
-        train_str, word_freq_pairs, total_words = model.init(n, ts, 1,
-                                                             train_str)
-        finish_model(model, n, ts, word_freq_pairs, total_words)
+    if opts.perplexity:
+        train_str, word_freq_pairs, total_words = model.init(n, 1, train_str)
+        finish_model(model, n, gts, word_freq_pairs, total_words)
         test_t, test_str = model.processFile(n, 1, None)
         if n == 1:
-            perplexity = model.uni_perplex(test_t, ts)
+            perplexity = model.uni_perplex(test_t, gts)
         elif n == 2:
-            perplexity = model.bi_perplex(test_t, ts)
+            perplexity = model.bi_perplex(test_t, gts)
         else:
             perplexity = model.n_laplace_perplex_help(test_t, n)
 
         print("Perplexity: " + str(perplexity))
 
-    if classify:
+    if opts.classify:
         t_arg = Wrapper()
-        model.feature_num = 1 - 1
+        model.feature_num = 0 if opts.classify is True else 4*(opts.classify-1)
         zeroSet, oneSet, neg_class = model.processFile(n, 2, train_str)
         if n == 1:
             zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
@@ -701,17 +742,17 @@ def main():
             one_types = len(one_freq_pairs)
             one_words = len(oneSet)
 
-            finish_model(model, n, ts, zero_freq_pairs, zero_words)
+            finish_model(model, n, gts, zero_freq_pairs, zero_words)
             zero_n = model.unigrams
             zero_ocm = model.uni_ocm
 
-            finish_model(model, n, ts, one_freq_pairs, one_words)
+            finish_model(model, n, gts, one_freq_pairs, one_words)
             one_n = model.unigrams
             one_ocm = model.uni_ocm
 
             perplex_fun = model.uni_perplex
-            zero_args = (t_arg, ts, zero_n, zero_words, zero_ocm, zero_types)
-            one_args = (t_arg, ts, one_n, one_words, one_ocm, one_types)
+            zero_args = (t_arg, gts, zero_n, zero_words, zero_ocm, zero_types)
+            one_args = (t_arg, gts, one_n, one_words, one_ocm, one_types)
         elif n == 2:
             zero_freq_pairs = model.bi_count_pairs(zeroSet, n, True)
             zero_types = len(zero_freq_pairs)
@@ -720,17 +761,17 @@ def main():
             one_types = len(one_freq_pairs)
             one_words = model.total_words
 
-            finish_model(model, n, ts, zero_freq_pairs, zero_words)
+            finish_model(model, n, gts, zero_freq_pairs, zero_words)
             zero_n = model.bigrams
             zero_ocm = model.bi_ocm
 
-            finish_model(model, n, ts, one_freq_pairs, one_words)
+            finish_model(model, n, gts, one_freq_pairs, one_words)
             one_n = model.bigrams
             one_ocm = model.bi_ocm
 
             perplex_fun = model.bi_perplex
-            zero_args = (t_arg, ts, zero_n, zero_words, zero_ocm, zero_types)
-            one_args = (t_arg, ts, one_n, one_words, one_ocm, one_types)
+            zero_args = (t_arg, gts, zero_n, zero_words, zero_ocm, zero_types)
+            one_args = (t_arg, gts, one_n, one_words, one_ocm, one_types)
         else:
             zero_freq_pairs = model.n_count_pairs(zeroSet, n, True)
             zero_types = len(zero_freq_pairs)
@@ -739,10 +780,10 @@ def main():
             one_types = len(one_freq_pairs)
             one_words = model.total_words
 
-            finish_model(model, n, ts, zero_freq_pairs, zero_words)
+            finish_model(model, n, gts, zero_freq_pairs, zero_words)
             zero_n = model.ngrams
 
-            finish_model(model, n, ts, one_freq_pairs, one_words)
+            finish_model(model, n, gts, one_freq_pairs, one_words)
             one_n = model.ngrams
 
             perplex_fun = model.n_laplace_perplex_help
@@ -758,11 +799,11 @@ def main():
             zero_plex = perplex_fun(*zero_args)
             one_plex = perplex_fun(*one_args)
 
-            guess = neg_class if zero_plex <= one_plex else '1'
+            guess = str(neg_class) if zero_plex <= one_plex else '1'
             predictions.append(guess)
 
-        with open('kaggle_dump3.txt', 'w') as guesses:
+        with open(opts.output_file, 'w') as guesses:
             guesses.write('\n'.join(predictions))
-   
+
 if __name__ == '__main__':
     main()
