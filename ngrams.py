@@ -28,6 +28,9 @@ class Wrapper:
     def __len__(self):
         return len(self.datum)
 
+    def pop(self, index):
+        return self.datum.pop(index)
+
     def set_datum(self, datum):
         self.datum = datum
 
@@ -38,6 +41,7 @@ class Ngrams:
         self.start_token = "<s>"
         self.end_token = "</s>"
         self.unk_token = "<u>"
+        self.bg_tks = None
         self.unigrams = None
         self.uni_ocm = None
         self.bigrams = None
@@ -47,8 +51,8 @@ class Ngrams:
         self.train_len = None
         self.types = None
         self.n = opts.n
-        self.start_index = None
-        self.feature_num = None
+        self.num_features = None
+        self.feature_num = opts.classify
         self.opts = opts
         self.python2 = sys.version_info < (3,)
 
@@ -69,15 +73,17 @@ class Ngrams:
         self.types = len(word_freq_pairs)
         return string, word_freq_pairs, self.total_words
 
-    def parse_file(self, n, typ, begin_tokens):
+    def parse_file(self, n, typ):
         filename = self.opts.test_set if typ % 2 else self.opts.training_set
         if self.python2:
+            range_wrap = xrange
             punctuation = string.punctuation.replace("?", "").replace("'", "")
             punctuation = punctuation.replace("!", "").replace(".", "")
             with open(filename, 'r') as text:
                 tokens = unicode(text.read(), errors='replace')
 
         else:
+            range_wrap = range
             punctuation = string.punctuation.translate(str.maketrans(
                                                        "", "", ".?!'"))
             with open(filename, 'r', errors="replace") as text:
@@ -94,6 +100,12 @@ class Ngrams:
         while self.unk_token in tokens:
             self.unk_token += '>'
 
+        begin_tokens = ""
+        for i in range_wrap(n-1):
+            begin_tokens += ' ' + self.start_token + ' '
+        begin_tokens = begin_tokens[:-1]
+        self.bg_tks = begin_tokens
+
         start_tokens = ' ' + self.end_token
         start_tokens += begin_tokens
 
@@ -109,12 +121,14 @@ class Ngrams:
                         r" \1" + start_tokens, tokens)
         tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
         if self.opts.classify:
-            x = tokens.partition('\n')[0].count(',')
-            if not x:
-                sys.exit("1st line of the file doesn't have classes defined. "
-                         "Cannot classify. Ex: 'class1,class2,text'.")
-            x = self.start_index = (3*x) + int(x*(x-1)/2)
-            tokens = re_sub(" <s>\n([^\n]{%i})" % x,
+            commas = self.num_features = tokens.partition('\n')[0].count(',')
+            if not commas:
+                sys.exit("1st line of the file doesn't define features; cannot"
+                         " classify. Ex: 'feature1, feature2 ,\u2026,text'.")
+            if commas < self.feature_num:
+                sys.exit("Attempting to classify feature that is not defined.")
+            non_commas = "[^,]+," * commas
+            tokens = re_sub("%s\n(%s)" % (begin_tokens, non_commas),
                             r"\n\1" + begin_tokens, tokens)
         else:
             tokens = re_sub("\n(?=[^\n])", " ", tokens)
@@ -125,19 +139,20 @@ class Ngrams:
         return tokens
 
     def processFile(self, n, typ, string=None):
-        list_wrap = (lambda x: x) if self.python2 else list
-        begin_tokens = ""
-        for i in range(n-1):
-            begin_tokens += ' ' + self.start_token + ' '
-        begin_tokens = begin_tokens[:-1]
+        if self.python2:
+            list_wrap = lambda x: x
+            range_wrap = xrange
+        else:
+            list_wrap = list
+            range_wrap = range
 
         if not string:
-            string = self.parse_file(n, typ, begin_tokens)
+            string = self.parse_file(n, typ)
 
         if typ < 2:
             tmp = list_wrap(filter(bool, string.split()))
             tokens = []
-            for i in range(n-1):
+            for i in range_wrap(n-1):
                 tokens.append(tmp.pop())
             tokens.extend(tmp)
 
@@ -145,42 +160,61 @@ class Ngrams:
                 self.train_len = len(tokens)
             return tokens, string
 
-        string = string[-len(begin_tokens):] + string[:-len(begin_tokens)]
+        string = string[-len(self.bg_tks):] + string[:-len(self.bg_tks)]
         tokens = list_wrap(filter(bool, string.split('\n')))
         del tokens[:2]
-        x = self.start_index
-        tokens[0] = tokens[0][:x] + begin_tokens + tokens[0][x:]
+
+        last_pos = -1
+        for _ in range_wrap(self.num_features):
+            last_pos = tokens[0].find(',', last_pos+1)
+            if last_pos == -1:
+                sys.exit("More features are defined than are present.")
+        last_pos += 1
+        tokens[0] = tokens[0][:last_pos] + self.bg_tks + tokens[0][last_pos:]
 
         if typ != 2:
             return tokens
 
-        zeroSet = []
-        oneSet = []
+        class_set = set()
         for line in tokens:
-            clas = line[self.feature_num]
-            line = line[x+1:]
-            if clas != '1':  # sometimes 0 and sometimes -1
-                zeroSet.extend(line.split())
-            else:
-                oneSet.extend(line.split())
+            end_comma = -1
+            for _ in range_wrap(self.feature_num):
+                begin_comma = end_comma
+                end_comma = line.find(',', end_comma+1)
+                if end_comma == -1:
+                    sys.exit("More features are defined than are present.")
 
-        neg_flag = 0
-        pos_flag = 0
-        ft_num = self.feature_num
-        for line in tokens:
-            if not neg_flag and (line[ft_num] != 1):
-                neg_class = line[ft_num]
-                if ((neg_class == '0') or
-                    (neg_class == '-' and line[ft_num+1] == '1' and
-                     line[ft_num+2] == ' ')):
-                    neg_flag = 1
-                else:
-                    sys.exit("Negative class value must be 0 or -1.")
-            elif not pos_flag:
-                pos_flag = 1
-            if neg_flag & pos_flag:
-                return zeroSet, oneSet, neg_class
-        sys.exit("Only one class in the training set. Exiting now.")
+            last_comma = end_comma
+            for _ in range_wrap(self.num_features-self.feature_num):
+                last_comma = line.find(',', last_comma+1)
+                if last_comma == -1:
+                    sys.exit("More features are defined than are present.")
+
+            last_comma += 2
+            begin_comma += 1
+            clas = int(line[begin_comma:end_comma])
+            if clas == 0:
+                if neg_class:
+                    sys.exit("Multiple negative classes. "
+                             "Must be either 0 or -1, not both.")
+                neg_class = 0
+                negSet.extend(line[last_comma:].split())
+            elif clas == -1:
+                if neg_class == 0:
+                    sys.exit("Multiple negative classes. "
+                             "Must be either 0 or -1, not both.")
+                neg_class = -1
+                print line
+                negSet.extend(line[last_comma:].split())
+            elif clas == 1:
+                posSet.extend(line[last_comma:].split())
+            else:
+                sys.exit("Class values must be positive (1), "
+                         "and negative (0 or -1).")
+
+        if not len(negSet) or not len(posSet):
+            sys.exit("Only one class in the training set. Exiting now.")
+        return negSet, posSet, str(neg_class)
 
     """
     Get total counts, and word frequency dictionaries.
@@ -417,8 +451,14 @@ class Ngrams:
     Then gets probabilty distributions from good turing smoothing.
     """
     def occurrenceToUniTuring(self, word_freq_pairs, total_words):
-        occurence_map = OrderedDict.fromkeys(range(1, max(
-                                             word_freq_pairs.values())+2), 0)
+        if self.python2:
+            range_wrap = xrange
+            values = word_freq_pairs.itervalues()
+        else:
+            range_wrap = range
+            values = word_freq_pairs.values()
+
+        occurence_map = OrderedDict.fromkeys(range_wrap(1, max(values)+2), 0)
 
         values = (word_freq_pairs.itervalues() if self.python2 else
                   word_freq_pairs.values())
@@ -448,9 +488,17 @@ class Ngrams:
         self.unigrams = prob_dict
 
     def occurrenceToBiTuring(self, word_freq_pairs, total_words):
-        list_wrap = (lambda x: x) if self.python2 else list
+        if self.python2:
+            list_wrap = lambda x: x
+            range_wrap = xrange
+            keys = word_freq_pairs.iterkeys()
+        else:
+            list_wrap = list
+            range_wrap = range
+            keys = word_freq_pairs.keys()
+
         unk_token = self.unk_token
-        occurence_map = dict.fromkeys(word_freq_pairs.keys())
+        occurence_map = dict.fromkeys(keys)
 
         items = (word_freq_pairs.iteritems() if self.python2 else
                  word_freq_pairs.items())
@@ -477,7 +525,8 @@ class Ngrams:
                 nxt_lvl_vals = (nxt_lvl_dict.itervalues() if self.python2 else
                                 nxt_lvl_dict.values())
                 top = max(nxt_lvl_vals)
-                occurence_map[word] = OrderedDict.fromkeys(range(1, top+2), 0)
+                occurence_map[word] = OrderedDict.fromkeys(range_wrap(1, top+2
+                                                                      ), 0)
 
                 nxt_lvl_vals = (nxt_lvl_dict.itervalues() if self.python2 else
                                 nxt_lvl_dict.values())
@@ -657,6 +706,7 @@ class Ngrams:
         help_dict = ngrams
         if n == 1:
             return log10(help_dict.get(tokens[0], 1 / (total_words+types)))
+
         nxt_token = tokens.popleft()
         if nxt_token in help_dict:
             return self.n_laplace_perplex(tokens, help_dict[nxt_token],
@@ -682,7 +732,8 @@ class Ngrams:
         entropy = 0.0
         num_tokens = len(tokens)
         words = deque(tokens[:n])
-        for i in range(num_tokens - n):
+        range_wrap = xrange if self.python2 else range
+        for i in range_wrap(num_tokens - n):
             entropy -= self.n_laplace_perplex(copy(words), ngram, tw, types, n)
             del words[0]
             words.append(tokens[i+n])
@@ -693,7 +744,6 @@ class Ngrams:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-
     parser.add_argument("-n", type=int, default=2,
                         help="Size of the probability tuples.")
     parser.add_argument("-sent", "--sentence", action="store_true",
@@ -720,34 +770,38 @@ def parse_args():
     parser.add_argument("-c", "--classify", metavar='FEATURE_NUM', nargs='?',
                         default="",
                         help="Binary classify the text based on perplexity on "
-                             "the specified feature number (1 by default)."
-                             "Ex: feature1,feature2,...,featureN,text")
+                             "the specified feature number (1 by default). "
+                             "Ex: feature1, feature2 ,\u2026,text.")
 
     parser.add_argument("output_file", action="store", nargs='?')
     parser.add_argument("training_set", action="store")
     parser.add_argument("test_set", action="store", nargs='?')
 
-    parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n              "
-                    "   [-h] [-n N] [-sent] [-t T] [-ls | -gts] [-p] "
+    parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n         "
+                    "        [-h] [-n N] [-sent] [-t T] [-ls | -gts] [-p] "
                     "[-c [FEATURE_NUM] output_file] training_set test_set")
     error_str = ""
     opts = parser.parse_args()
     if opts.classify.isdigit():
         opts.classify = int(opts.classify)
+        if opts.classify <= 0:
+            error_str += "Feature number must be >= 1.\n"
     if opts.classify and opts.output_file and not opts.test_set:
         opts.test_set = opts.training_set
         opts.training_set = opts.output_file
         opts.output_file = opts.classify
         opts.classify = 1  # Default
     elif (not opts.classify and opts.output_file and
-          not(opts.test_set and opts.training_set)):
+          not (opts.test_set and opts.training_set)):
         # Only flip files if they are missing, otherwise ignore
         opts.test_set = opts.training_set
         opts.training_set = opts.output_file
     elif opts.classify and not opts.output_file:
+        if error_str:
+            error_str += "                  "
         error_str += ("Must input an output file when performing binary "
-                      "classification (-c).")
-    if (opts.perplexity or opts.classify):
+                      "classification (-c).\n")
+    if opts.perplexity or opts.classify:
         if not opts.test_set:
             if error_str:
                 error_str += "                  "
@@ -762,6 +816,10 @@ def parse_args():
         if error_str:
             error_str += "                  "
         error_str += "Threshold must be > 0.\n"
+    if opts.n <= 0:
+        if error_str:
+            error_str += "                  "
+        error_str += "N must be >= 1.\n"
     if opts.turing and (opts.n > 2):
         if error_str:
             error_str += "                  "
@@ -820,7 +878,6 @@ def main():
 
     if opts.classify:
         t_arg = Wrapper()
-        model.feature_num = 4 * (opts.classify-1)
         zeroSet, oneSet, neg_class = model.processFile(n, 2, train_str)
         if n == 1:
             zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
@@ -878,16 +935,23 @@ def main():
             zero_args = (t_arg, n, zero_n, zero_words, zero_types)
             one_args = (t_arg, n, one_n, one_words, one_types)
 
+        range_wrap = xrange if model.python2 else range
         predictions = []
         test_t = model.processFile(n, 3, test_str)
         for line in test_t:
-            t_arg.set_datum(line[model.start_index:].split())
+            last_comma = -1
+            for _ in range_wrap(model.num_features):
+                last_comma = line.find(',', last_comma+1)
+                if last_comma == -1:
+                    sys.exit("More features are defined than are present.")
+
+            t_arg.set_datum(line[last_comma+2:].split())
 
             # Compare perplexities
             zero_plex = perplex_fun(*zero_args)
             one_plex = perplex_fun(*one_args)
 
-            guess = str(neg_class) if zero_plex <= one_plex else '1'
+            guess = neg_class if zero_plex <= one_plex else '1'
             predictions.append(guess)
 
         with open(opts.output_file, 'w') as guesses:
