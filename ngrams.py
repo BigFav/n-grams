@@ -1,11 +1,11 @@
 from __future__ import division, unicode_literals
 import argparse
+import random
+import re
 import sys
 import string
 from copy import copy
-from math import log10
-from re import sub as re_sub
-from random import uniform as rand_uniform
+from math import log10, isnan
 from collections import Counter, OrderedDict, defaultdict, deque
 
 
@@ -50,10 +50,12 @@ class Ngrams:
         self.total_words = None
         self.train_len = None
         self.types = None
+        self.alpha = opts.laplace
         self.n = opts.n
         self.num_features = None
         self.feature_num = opts.classify
-        self.opts = opts
+        self.training_set = opts.training_set
+        self.test_set = opts.test_set
         self.python2 = sys.version_info < (3,)
 
     def init(self, n, unk, string=None):
@@ -70,11 +72,11 @@ class Ngrams:
         else:
             word_freq_pairs = self.n_count_pairs(tokens, n, unk)
 
-        self.types = len(word_freq_pairs)
+        self.types = len(word_freq_pairs) * self.alpha
         return string, word_freq_pairs, self.total_words
 
     def parse_file(self, n, typ):
-        filename = self.opts.test_set if typ % 2 else self.opts.training_set
+        filename = self.test_set if typ % 2 else self.training_set
         if self.python2:
             range_wrap = xrange
             punctuation = string.punctuation.replace("?", "").replace("'", "")
@@ -102,36 +104,39 @@ class Ngrams:
 
         begin_tokens = ""
         for i in range_wrap(n-1):
-            begin_tokens += ' ' + self.start_token + ' '
-        begin_tokens = begin_tokens[:-1]
+            begin_tokens += ' ' + self.start_token
         self.bg_tks = begin_tokens
 
         start_tokens = ' ' + self.end_token
         start_tokens += begin_tokens
 
-        tokens = re_sub(":\)", " \u1F601 ", tokens)
+        tokens = tokens.replace(":)", " \u1F601 ")
         for ch in punctuation:
             tokens = tokens.replace(ch, ' ' + ch + ' ')
-        tokens = re_sub("\.\.+", " \u2026 ", tokens)
-        tokens = re_sub("(\!+\?|\?+\!)[?!]*",
+        tokens = re.sub("\.\.+", " \u2026 ", tokens)
+        tokens = re.sub("(\!+\?|\?+\!)[?!]*",
                         " \u203D" + start_tokens, tokens)
-        tokens = re_sub("\!\!+", " !!" + start_tokens, tokens)
-        tokens = re_sub("\?\?+", " ??" + start_tokens, tokens)
-        tokens = re_sub("((?<![.?!\s])[.?!])",
+        tokens = re.sub("\!\!+", " !!" + start_tokens, tokens)
+        tokens = re.sub("\?\?+", " ??" + start_tokens, tokens)
+        tokens = re.sub("((?<![.?!\s])[.?!])",
                         r" \1" + start_tokens, tokens)
-        tokens = re_sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
-        if self.opts.classify:
-            commas = self.num_features = tokens.partition('\n')[0].count(',')
-            if not commas:
-                sys.exit("1st line of the file doesn't define features; cannot"
-                         " classify. Ex: 'feature1, feature2 ,\u2026,text'.")
-            if commas < self.feature_num:
-                sys.exit("Attempting to classify feature that is not defined.")
-            non_commas = "[^,]+," * commas
-            tokens = re_sub("%s\n(%s)" % (begin_tokens, non_commas),
+        tokens = re.sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
+        if self.feature_num:
+            tokens = re.sub("(?<!%s)\n(?!$)" % self.start_token,
+                            " %s\n" % start_tokens, tokens)
+            comas = self.num_features = tokens.count(',', 0, tokens.find('\n'))
+            if not comas:
+                sys.exit("1st line of the file doesn't define categories; "
+                         "cannot classify. Ex: 'category1, category2 "
+                         ",\u2026,text'.")
+            if comas < self.feature_num:
+                sys.exit("Attempting to classify category that is not "
+                         "defined.")
+            non_commas = "[^,]+," * comas
+            tokens = re.sub("%s\n(%s)" % (begin_tokens, non_commas),
                             r"\n\1" + begin_tokens, tokens)
         else:
-            tokens = re_sub("\n(?=[^\n])", " ", tokens)
+            tokens = re.sub("\n(?=[^\n])", " ", tokens)
 
         if self.end_token not in tokens:
             tokens += start_tokens if n > 1 else self.end_token
@@ -160,61 +165,53 @@ class Ngrams:
                 self.train_len = len(tokens)
             return tokens, string
 
-        string = string[-len(self.bg_tks):] + string[:-len(self.bg_tks)]
         tokens = list_wrap(filter(bool, string.split('\n')))
-        del tokens[:2]
+        tokens[-1] = tokens[-1].strip()
+        if tokens[-1][-len(self.start_token):] == self.start_token:
+            tokens[-1] = tokens[-1][:-len(self.bg_tks)]
+        else:
+            tokens[-1] += ' ' + self.end_token
 
+        num_features = tokens[0].count(',')
+        del tokens[0]
+
+        if num_features != self.num_features:
+            print("Warning: The sets do not match. One has more categories "
+                  "than the other.")
         last_pos = -1
-        for _ in range_wrap(self.num_features):
+        for _ in range_wrap(num_features):
             last_pos = tokens[0].find(',', last_pos+1)
             if last_pos == -1:
-                sys.exit("More features are defined than are present.")
+                sys.exit("More categories are defined than are present.")
+
         last_pos += 1
         tokens[0] = tokens[0][:last_pos] + self.bg_tks + tokens[0][last_pos:]
 
         if typ != 2:
             return tokens
 
-        class_set = set()
+        # Start with some basic classes in the set
+        class_sets = defaultdict(list)
         for line in tokens:
             end_comma = -1
             for _ in range_wrap(self.feature_num):
                 begin_comma = end_comma
                 end_comma = line.find(',', end_comma+1)
                 if end_comma == -1:
-                    sys.exit("More features are defined than are present.")
+                    sys.exit("More categories are defined than are present.")
 
             last_comma = end_comma
             for _ in range_wrap(self.num_features-self.feature_num):
                 last_comma = line.find(',', last_comma+1)
                 if last_comma == -1:
-                    sys.exit("More features are defined than are present.")
+                    sys.exit("More categories are defined than are present.")
+            clas = line[begin_comma+1:end_comma].strip()
+            class_sets[clas].extend(line[last_comma+2:].split())
 
-            last_comma += 2
-            begin_comma += 1
-            clas = int(line[begin_comma:end_comma])
-            if clas == 0:
-                if neg_class:
-                    sys.exit("Multiple negative classes. "
-                             "Must be either 0 or -1, not both.")
-                neg_class = 0
-                negSet.extend(line[last_comma:].split())
-            elif clas == -1:
-                if neg_class == 0:
-                    sys.exit("Multiple negative classes. "
-                             "Must be either 0 or -1, not both.")
-                neg_class = -1
-                print line
-                negSet.extend(line[last_comma:].split())
-            elif clas == 1:
-                posSet.extend(line[last_comma:].split())
-            else:
-                sys.exit("Class values must be positive (1), "
-                         "and negative (0 or -1).")
-
-        if not len(negSet) or not len(posSet):
-            sys.exit("Only one class in the training set. Exiting now.")
-        return negSet, posSet, str(neg_class)
+        if len(class_sets) == 1:
+            sys.exit("Category only has one class in the training set. "
+                     "Exiting now.")
+        return class_sets
 
     """
     Get total counts, and word frequency dictionaries.
@@ -277,6 +274,11 @@ class Ngrams:
 
         return word_freq_pairs
 
+    """
+    Creates the counts for the dictionaries (i.e. creates the dicts).
+    Takes in the dicts so far, and the current word, along with
+    the next n-1 words. O(1) space.
+    """
     def dict_creator(self, freq_dict, wrd, words):
         if words:
             freq_tmp = freq_dict
@@ -305,22 +307,26 @@ class Ngrams:
             freq_tmp[words[-2]][words[-1]] += 1
 
     def unk_tokenize(self, word_freq_pairs, n):
-        if n == 2:
-            if self.python2:
-                list_wrap = lambda x: x
-                values = word_freq_pairs.itervalues()
-            else:
-                list_wrap = list
-                values = word_freq_pairs.values()
+        list_wrap = list if not self.python2 else lambda x: x
+        tmp_pairs = word_freq_pairs
+        stack = [(tmp_pairs, n)]
 
-            for nxt_lvl_dict in values:
-                for word, count in list_wrap(nxt_lvl_dict.items()):
-                    if (count <= self.threshold) and (word != self.unk_token):
-                        del nxt_lvl_dict[word]
-                        nxt_lvl_dict[self.unk_token] += count
-        else:
-            for word in word_freq_pairs:
-                self.unk_tokenize(word_freq_pairs[word], n - 1)
+        while stack:
+            tmp_pairs, n = stack.pop()
+            if n == 2:
+                values = (tmp_pairs.itervalues() if self.python2 else
+                          tmp_pairs.values())
+                for nxt_lvl_dict in values:
+                    for word, count in list_wrap(nxt_lvl_dict.items()):
+                        if (count <= self.threshold and
+                                word != self.unk_token):
+                            # Apply <u>
+                            del nxt_lvl_dict[word]
+                            nxt_lvl_dict[self.unk_token] += count
+            else:
+                n -= 1
+                for word in tmp_pairs:
+                    stack.append((tmp_pairs[word], n))
 
         return word_freq_pairs
 
@@ -406,45 +412,94 @@ class Ngrams:
     """
     Computes Laplace smoothed probability distributions.
     """
-    def laplace_unigrams(self, word_freq_pairs, total_words):
+    def laplace_unigrams(self, word_freq_pairs, total_words, V):
         prob_dict = word_freq_pairs
-        dict_len = len(prob_dict)
         items = prob_dict.iteritems() if self.python2 else prob_dict.items()
         for word, count in items:
-            prob_dict[word] = (count+1) / (total_words+dict_len)
+            prob_dict[word] = (count+self.alpha) / (total_words+V)
 
         self.unigrams = prob_dict
 
-    def laplace_bigrams(self, word_freq_pairs, total_words):
+    def laplace_ngrams(self, word_freq_pairs, total_words, n, V):
+        alpha = self.alpha
+        stack = [(word_freq_pairs, total_words, n)]
         prob_dict = word_freq_pairs
-        dict_len = len(prob_dict)
-        items = prob_dict.iteritems() if self.python2 else prob_dict.items()
-        for top_word, nxt_lvl_dict in items:
-            nxt_lvl_items = (nxt_lvl_dict.iteritems() if self.python2 else
-                             nxt_lvl_dict.items())
-            for bot_word, cnt in nxt_lvl_items:
-                nxt_lvl_dict[bot_word] = ((cnt+1) /
-                                          (total_words[top_word]+dict_len))
-        self.bigrams = prob_dict
 
-    def laplace_ngrams(self, word_freq_pairs, total_words, n):
-        prob_dict = word_freq_pairs
+        # Iterative walk using "stack," marginally faster than recursion
+        while stack:
+            word_freq_pairs, total_words, my_n = stack.pop()
+            if my_n == 2:
+                items = (word_freq_pairs.iteritems() if self.python2 else
+                         word_freq_pairs.items())
+                for top_word, nxt_lvl_dict in items:
+                    nxt_lvl_items = (nxt_lvl_dict.iteritems() if self.python2
+                                     else nxt_lvl_dict.items())
+                    for bot_word, cnt in nxt_lvl_items:
+                        nxt_lvl_dict[bot_word] = ((cnt+alpha) /
+                                                  (total_words[top_word]+V))
+            else:
+                my_n -= 1
+                for word in word_freq_pairs:
+                    stack.append((word_freq_pairs[word],
+                                  total_words[word], my_n))
         if n == 2:
-            dict_len = len(prob_dict)
-            items = (prob_dict.iteritems() if self.python2 else
-                     prob_dict.items())
+            self.bigrams = prob_dict
+        else:
+            self.ngrams = prob_dict
+
+        """
+        # Recursive solution, faster than queue walk (obvious the way
+        # the walk is structured; much wider than deep). But
+        # surprisingly close to iterative.
+        if n == 2:
+            items = (word_freq_pairs.iteritems() if self.python2 else
+                     word_freq_pairs.items())
             for top_word, nxt_lvl_dict in items:
                 nxt_lvl_items = (nxt_lvl_dict.iteritems() if self.python2 else
                                  nxt_lvl_dict.items())
                 for bot_word, cnt in nxt_lvl_items:
-                    nxt_lvl_dict[bot_word] = ((cnt+1) /
-                                              (total_words[top_word]+dict_len))
+                    nxt_lvl_dict[bot_word] = ((cnt+self.alpha) /
+                                              (total_words[top_word]+V))
             return
 
+        n -= 1
         for word in prob_dict:
-            self.laplace_ngrams(prob_dict[word], total_words[word], n - 1)
+            self.laplace_ngrams(prob_dict[word], total_words[word], n, V)
 
-        self.ngrams = prob_dict
+        if self.n == 2:
+            self.bigrams = prob_dict
+        else:
+            self.ngrams = prob_dict
+
+        # Iterative walk using "queue", slowest of all
+        if n > 3:
+            for word in word_freq_pairs:
+                params.append((word_freq_pairs[word], total_words[word]))
+            word_freq_pairs, total_words = params.popleft()
+
+        while not isinstance(0, total_words.default_factory):
+            for word in word_freq_pairs:
+                params.append((word_freq_pairs[word], total_words[word]))
+            word_freq_pairs, total_words = params.popleft()
+
+        while 1:
+            items = (word_freq_pairs.iteritems() if self.python2 else
+                     word_freq_pairs.items())
+            for top_word, nxt_lvl_dict in items:
+                nxt_lvl_items = (nxt_lvl_dict.iteritems() if self.python2 else
+                                 nxt_lvl_dict.items())
+                for bot_word, cnt in nxt_lvl_items:
+                    nxt_lvl_dict[bot_word] = ((cnt+alpha) /
+                                              (total_words[top_word]+V))
+            if not params:
+                break
+            word_freq_pairs, total_words = params.popleft()
+
+        if n == 2:
+            self.bigrams = prob_dict
+        else:
+            self.ngrams = prob_dict
+        """
 
     """
     Creates a dict of how many times a word of a certain frequency occurs.
@@ -578,7 +633,7 @@ class Ngrams:
         key = ""
         values = (self.unigrams.itervalues() if self.python2 else
                   self.unigrams.values())
-        r = rand_uniform(0, sum(values))
+        r = random.uniform(0, sum(values))
 
         items = (self.unigrams.iteritems() if self.python2 else
                  self.unigrams.items())
@@ -593,7 +648,7 @@ class Ngrams:
         key = ""
         values = (self.bigrams[word].itervalues() if self.python2 else
                   self.bigrams[word].values())
-        r = rand_uniform(0, sum(values))
+        r = random.uniform(0, sum(values))
 
         items = (self.bigrams[word].iteritems() if self.python2 else
                  self.bigrams[word].items())
@@ -627,7 +682,7 @@ class Ngrams:
         s = 0.0
         key = ""
         values = tmp_dict.itervalues() if self.python2 else tmp_dict.values()
-        r = rand_uniform(0, sum(values))
+        r = random.uniform(0, sum(values))
         items = tmp_dict.iteritems() if self.python2 else tmp_dict.items()
         for key, weight in items:
             s += weight
@@ -645,22 +700,24 @@ class Ngrams:
         if gts:
             if not uni_ocm:
                 uni_ocm = self.uni_ocm
+            thresh = self.threshold
             for token in tokens:
-                entropy -= log10(unigrams.get(token,
-                                 uni_ocm[self.threshold] / train_len))
+                entropy -= log10(unigrams.get(token, uni_ocm[thresh] /
+                                                     train_len))
         else:
             if not V:
                 V = self.types
+            alpha = self.alpha
             for token in tokens:
-                entropy -= log10(unigrams.get(token, 1 / (train_len+V)))
+                entropy -= log10(unigrams.get(token, alpha / (train_len+V)))
 
         return 10**(entropy / (len(tokens) - (self.n-1)))
 
-    def bi_perplex(self, tokens, gts, bigrams=None,
+    def bi_perplex(self, tokens, gts, bigram=None,
                    tw=None, bi_ocm=None, V=None):
         if not tw:
             tw = self.total_words
-            bigrams = self.bigrams
+            bigram = self.bigrams
 
         ut = self.unk_token
         thresh = self.threshold
@@ -670,22 +727,23 @@ class Ngrams:
             if not bi_ocm:
                 bi_ocm = self.bi_ocm
             for token in tokens:
-                if prev_t in bigrams:
-                    entropy -= log10(bigrams[prev_t].get(token,
+                if prev_t in bigram:
+                    entropy -= log10(bigram[prev_t].get(token,
                                      bi_ocm[prev_t][thresh] / tw[prev_t]))
                 else:
-                    entropy -= log10(bigrams[ut].get(token,
+                    entropy -= log10(bigram[ut].get(token,
                                      bi_ocm[ut][thresh] / tw[ut]))
                 prev_t = token
         else:
             if not V:
                 V = self.types
+            alpha = self.alpha
             for token in tokens:
-                if prev_t in bigrams:
-                    entropy -= log10(bigrams[prev_t].get(token,
-                                                         1 / (tw[prev_t]+V)))
+                if prev_t in bigram:
+                    entropy -= log10(bigram[prev_t].get(token, alpha /
+                                                        (tw[prev_t]+V)))
                 else:
-                    entropy -= log10(bigrams[ut].get(token, 1 / (tw[ut]+V)))
+                    entropy -= log10(bigram[ut].get(token, alpha / (tw[ut]+V)))
 
                 prev_t = token
 
@@ -705,7 +763,8 @@ class Ngrams:
     def n_laplace_perplex(self, tokens, ngrams, total_words, types, n):
         help_dict = ngrams
         if n == 1:
-            return log10(help_dict.get(tokens[0], 1 / (total_words+types)))
+            return log10(help_dict.get(tokens[0], self.alpha /
+                                                  (total_words+types)))
 
         nxt_token = tokens.popleft()
         if nxt_token in help_dict:
@@ -719,7 +778,7 @@ class Ngrams:
             sum_dict[hash(''.join(help_dict.keys()))] = total
         """
         # small "punishment" for not being in it (100), real approx is too slow
-        return log10(1 / (100 + types))
+        return log10(self.alpha / (100 + types))
 
     def n_laplace_perplex_help(self, tokens, n,
                                ngram=None, tw=None, types=None):
@@ -745,7 +804,8 @@ class Ngrams:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", type=int, default=2,
-                        help="Size of the probability tuples.")
+                        help="Size of the probability tuples. N should be < "
+                             "24 and N must be >= 1.")
     parser.add_argument("-sent", "--sentence", action="store_true",
                         help="Generate sentence based on unsmoothed "
                              "n-grams of the training set.")
@@ -753,13 +813,15 @@ def parse_args():
                         default=1, metavar='T',
                         help="Set the threshold; all words that have a "
                              "frequency <= to the threshold are considered "
-                             "unknown (1 by default). Threshold must be > 1 in"
-                             "order to perform perplexity based operations.")
+                             "unknown (1 by default). Threshold must be >= 1 "
+                             "to perform perplexity based operations.")
 
     smoothing_types = parser.add_mutually_exclusive_group()
-    smoothing_types.add_argument("-ls", "--laplace", action="store_true",
-                                 help="Use Laplace (Additive) smoothing. "
-                                      "This is the default.")
+    smoothing_types.add_argument("-ls", "--laplace", action="store", nargs='?',
+                                 type=float, default=1, metavar="\u03B1",
+                                 const=1, help="Use Laplace (Additive) "
+                                               "smoothing; plus-one is the "
+                                               "default (\u03B1 = 1).")
     smoothing_types.add_argument("-gts", "--turing", action="store_true",
                                  help="Use Good Turing smoothing. Only "
                                       "available for n <= 2.")
@@ -767,19 +829,19 @@ def parse_args():
     parser.add_argument("-p", "--perplexity", action="store_true",
                         help="Compute the perplexity of the test set, "
                              "trained on the training set.")
-    parser.add_argument("-c", "--classify", metavar='FEATURE_NUM', nargs='?',
+    parser.add_argument("-c", "--classify", metavar="CATEGORY_NUM", nargs='?',
                         default="",
-                        help="Binary classify the text based on perplexity on "
-                             "the specified feature number (1 by default). "
-                             "Ex: feature1, feature2 ,\u2026,text.")
+                        help="Classify the text based on perplexity on "
+                             "the specified category number (1 by default). "
+                             "Ex: category1, category2 ,\u2026,text.")
 
     parser.add_argument("output_file", action="store", nargs='?')
     parser.add_argument("training_set", action="store")
     parser.add_argument("test_set", action="store", nargs='?')
 
-    parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n         "
-                    "        [-h] [-n N] [-sent] [-t T] [-ls | -gts] [-p] "
-                    "[-c [FEATURE_NUM] output_file] training_set test_set")
+    parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n              "
+                    "   [-h] [-n N] [-sent] [-t T] [-ls [\u03B1] | -gts] [-p] "
+                    "[-c [CATEGORY_NUM] output_file] training_set test_set")
     error_str = ""
     opts = parser.parse_args()
     if opts.classify.isdigit():
@@ -799,7 +861,7 @@ def parse_args():
     elif opts.classify and not opts.output_file:
         if error_str:
             error_str += "                  "
-        error_str += ("Must input an output file when performing binary "
+        error_str += ("Must input an output file when performing "
                       "classification (-c).\n")
     if opts.perplexity or opts.classify:
         if not opts.test_set:
@@ -816,21 +878,39 @@ def parse_args():
         if error_str:
             error_str += "                  "
         error_str += "Threshold must be > 0.\n"
-    if opts.n <= 0:
+    if opts.n < 1:
         if error_str:
             error_str += "                  "
         error_str += "N must be >= 1.\n"
+    if opts.n > 24:
+        input = raw_input if sys.version_info < (3,) else input
+        warning_str = ("Warning: program may crash at such a high N. "
+                       "Continue? (Y/n) ")
+        while True:
+            cont = input(warning_str)
+            if (cont == 'n') or (cont == 'N'):
+                if error_str:
+                    error_str += "                  "
+                error_str += "Choose to not continue with high N.\n"
+                break
+            elif (cont == 'y') or (cont == 'Y'):
+                break
+            warning_str = "Please enter y or N: "
     if opts.turing and (opts.n > 2):
         if error_str:
             error_str += "                  "
         error_str += "Good turing smoothing is only available for n <= 2.\n"
+    if isnan(opts.laplace) or (opts.laplace == float('inf')):
+        if error_str:
+            error_str += "                  "
+        error_str += "\u03B1 cannot be NaN and cannot be inf (\u221E).\n"
 
     if error_str:
         parser.error(error_str[:-1])
     return opts
 
 
-def finish_model(model, n, gts, word_freq_pairs, total_words):
+def finish_model(model, n, gts, word_freq_pairs, total_words, types):
     if gts:
         if n == 1:
             model.occurrenceToUniTuring(word_freq_pairs, total_words)
@@ -838,11 +918,9 @@ def finish_model(model, n, gts, word_freq_pairs, total_words):
             model.occurrenceToBiTuring(word_freq_pairs, total_words)
     else:
         if n == 1:
-            model.laplace_unigrams(word_freq_pairs, total_words)
-        elif n == 2:
-            model.laplace_bigrams(word_freq_pairs, total_words)
+            model.laplace_unigrams(word_freq_pairs, total_words, types)
         else:
-            model.laplace_ngrams(word_freq_pairs, total_words, n)
+            model.laplace_ngrams(word_freq_pairs, total_words, n, types)
 
 
 def main():
@@ -865,7 +943,7 @@ def main():
 
     if opts.perplexity:
         train_str, word_freq_pairs, total_words = model.init(n, 1, train_str)
-        finish_model(model, n, gts, word_freq_pairs, total_words)
+        finish_model(model, n, gts, word_freq_pairs, total_words, model.types)
         test_t, test_str = model.processFile(n, 1, None)
         if n == 1:
             perplexity = model.uni_perplex(test_t, gts)
@@ -878,62 +956,62 @@ def main():
 
     if opts.classify:
         t_arg = Wrapper()
-        zeroSet, oneSet, neg_class = model.processFile(n, 2, train_str)
+        freq_pairs = {}
+        types = {}
+        words = {}
+        args = {}
+        class_set = model.processFile(n, 2, train_str)
         if n == 1:
-            zero_freq_pairs = model.uni_count_pairs(zeroSet, n, True)
-            zero_types = len(zero_freq_pairs)
-            zero_words = len(zeroSet)
-            one_freq_pairs = model.uni_count_pairs(oneSet, n, True)
-            one_types = len(one_freq_pairs)
-            one_words = len(oneSet)
+            unigrams = {}
+            ocm = {}
+            items = (class_set.iteritems() if model.python2 else
+                     class_set.items())
+            for clas, class_words in items:
+                freq_pairs[clas] = model.uni_count_pairs(class_words, n, True)
+                types[clas] = len(freq_pairs[clas]) * opts.laplace
+                words[clas] = len(class_words)
 
-            finish_model(model, n, gts, zero_freq_pairs, zero_words)
-            zero_n = model.unigrams
-            zero_ocm = model.uni_ocm
-
-            finish_model(model, n, gts, one_freq_pairs, one_words)
-            one_n = model.unigrams
-            one_ocm = model.uni_ocm
+                finish_model(model, n, gts,
+                             freq_pairs[clas], words[clas], types[clas])
+                unigrams[clas] = model.unigrams
+                ocm[clas] = model.uni_ocm
+                args[clas] = (t_arg, gts, unigrams[clas],
+                              words[clas], ocm[clas], types[clas])
 
             perplex_fun = model.uni_perplex
-            zero_args = (t_arg, gts, zero_n, zero_words, zero_ocm, zero_types)
-            one_args = (t_arg, gts, one_n, one_words, one_ocm, one_types)
         elif n == 2:
-            zero_freq_pairs = model.bi_count_pairs(zeroSet, n, True)
-            zero_types = len(zero_freq_pairs)
-            zero_words = model.total_words
-            one_freq_pairs = model.bi_count_pairs(oneSet, n, True)
-            one_types = len(one_freq_pairs)
-            one_words = model.total_words
+            bigrams = {}
+            ocm = {}
+            items = (class_set.iteritems() if model.python2 else
+                     class_set.items())
+            for clas, class_words in items:
+                freq_pairs[clas] = model.bi_count_pairs(class_words, n, True)
+                types[clas] = len(freq_pairs[clas]) * opts.laplace
+                words[clas] = model.total_words
 
-            finish_model(model, n, gts, zero_freq_pairs, zero_words)
-            zero_n = model.bigrams
-            zero_ocm = model.bi_ocm
-
-            finish_model(model, n, gts, one_freq_pairs, one_words)
-            one_n = model.bigrams
-            one_ocm = model.bi_ocm
+                finish_model(model, n, gts,
+                             freq_pairs[clas], words[clas], types[clas])
+                bigrams[clas] = model.bigrams
+                ocm[clas] = model.bi_ocm
+                args[clas] = (t_arg, gts, bigrams[clas],
+                              words[clas], ocm[clas], types[clas])
 
             perplex_fun = model.bi_perplex
-            zero_args = (t_arg, gts, zero_n, zero_words, zero_ocm, zero_types)
-            one_args = (t_arg, gts, one_n, one_words, one_ocm, one_types)
         else:
-            zero_freq_pairs = model.n_count_pairs(zeroSet, n, True)
-            zero_types = len(zero_freq_pairs)
-            zero_words = model.total_words
-            one_freq_pairs = model.n_count_pairs(oneSet, n, True)
-            one_types = len(one_freq_pairs)
-            one_words = model.total_words
+            ngrams = {}
+            items = (class_set.iteritems() if model.python2 else
+                     class_set.items())
+            for clas, class_words in items:
+                freq_pairs[clas] = model.n_count_pairs(class_words, n, True)
+                types[clas] = len(freq_pairs[clas]) * opts.laplace
+                words[clas] = model.total_words
 
-            finish_model(model, n, gts, zero_freq_pairs, zero_words)
-            zero_n = model.ngrams
-
-            finish_model(model, n, gts, one_freq_pairs, one_words)
-            one_n = model.ngrams
+                finish_model(model, n, gts,
+                             freq_pairs[clas], words[clas], types[clas])
+                ngrams[clas] = model.ngrams
+                args[clas] = (t_arg, n, ngrams[clas], words[clas], types[clas])
 
             perplex_fun = model.n_laplace_perplex_help
-            zero_args = (t_arg, n, zero_n, zero_words, zero_types)
-            one_args = (t_arg, n, one_n, one_words, one_types)
 
         range_wrap = xrange if model.python2 else range
         predictions = []
@@ -943,16 +1021,22 @@ def main():
             for _ in range_wrap(model.num_features):
                 last_comma = line.find(',', last_comma+1)
                 if last_comma == -1:
-                    sys.exit("More features are defined than are present.")
+                    sys.exit("More categories are defined than are present.")
 
             t_arg.set_datum(line[last_comma+2:].split())
 
             # Compare perplexities
-            zero_plex = perplex_fun(*zero_args)
-            one_plex = perplex_fun(*one_args)
+            low = [None, float('inf')]
+            items = args.iteritems() if model.python2 else args.items()
+            for clas, params in items:
+                perplexity = perplex_fun(*params)
+                if perplexity < low[1]:
+                    low = [clas, perplexity]
 
-            guess = neg_class if zero_plex <= one_plex else '1'
-            predictions.append(guess)
+            if low[0][0] == '-':
+                predictions.append('-' + low[0][2:])
+            else:
+                predictions.append(low[0])
 
         with open(opts.output_file, 'w') as guesses:
             guesses.write('\n'.join(predictions))
