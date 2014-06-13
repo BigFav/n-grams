@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from __future__ import division, unicode_literals
 import argparse
 import random
@@ -57,6 +58,16 @@ class Ngrams:
         self.training_set = opts.training_set
         self.test_set = opts.test_set
         self.python2 = sys.version_info < (3,)
+
+    def error_handler(self, error_code):
+        print("Error: " + {
+            3: ("1st line of the file doesn't define categories; cannot "
+                "classify. Ex: 'category1, category2 ,\u2026,text'."),
+            4: "Attempting to classify category that is not defined.",
+            5: "More categories are defined than are present.",
+            6: "Category only has one class in the training set."
+        }[error_code])
+        sys.exit(error_code)
 
     def init(self, n, unk, string=None):
         self.bigrams = None
@@ -126,12 +137,9 @@ class Ngrams:
                             " %s\n" % start_tokens, tokens)
             comas = self.num_features = tokens.count(',', 0, tokens.find('\n'))
             if not comas:
-                sys.exit("1st line of the file doesn't define categories; "
-                         "cannot classify. Ex: 'category1, category2 "
-                         ",\u2026,text'.")
+                self.error_handler(3)
             if comas < self.feature_num:
-                sys.exit("Attempting to classify category that is not "
-                         "defined.")
+                self.error_handler(4)
             non_commas = "[^,]+," * comas
             tokens = re.sub("%s\n(%s)" % (begin_tokens, non_commas),
                             r"\n\1" + begin_tokens, tokens)
@@ -182,7 +190,7 @@ class Ngrams:
         for _ in range_wrap(num_features):
             last_pos = tokens[0].find(',', last_pos+1)
             if last_pos == -1:
-                sys.exit("More categories are defined than are present.")
+                self.error_handler(5)
 
         last_pos += 1
         tokens[0] = tokens[0][:last_pos] + self.bg_tks + tokens[0][last_pos:]
@@ -198,19 +206,18 @@ class Ngrams:
                 begin_comma = end_comma
                 end_comma = line.find(',', end_comma+1)
                 if end_comma == -1:
-                    sys.exit("More categories are defined than are present.")
+                    self.error_handler(5)
 
             last_comma = end_comma
             for _ in range_wrap(self.num_features-self.feature_num):
                 last_comma = line.find(',', last_comma+1)
                 if last_comma == -1:
-                    sys.exit("More categories are defined than are present.")
+                    self.error_handler(5)
             clas = line[begin_comma+1:end_comma].strip()
             class_sets[clas].extend(line[last_comma+2:].split())
 
         if len(class_sets) == 1:
-            sys.exit("Category only has one class in the training set. "
-                     "Exiting now.")
+            self.error_handler(6)
         return class_sets
 
     """
@@ -283,7 +290,7 @@ class Ngrams:
         if words:
             freq_tmp = freq_dict
             count_tmp = self.total_words[wrd]
-            for i, word in enumerate(words[:-3]):
+            for word in words[:-3]:
                 if not freq_tmp or not freq_tmp[word]:
                     freq_tmp[word] = defaultdict(dict)
                 if not count_tmp or not count_tmp[word]:
@@ -472,6 +479,8 @@ class Ngrams:
             self.ngrams = prob_dict
 
         # Iterative walk using "queue", slowest of all
+        # Also couls have replaced the stack with a deque and pop with
+        # popleft(), which is also slow.
         if n > 3:
             for word in word_freq_pairs:
                 params.append((word_freq_pairs[word], total_words[word]))
@@ -836,18 +845,27 @@ def parse_args():
                              "Ex: category1, category2 ,\u2026,text.")
 
     parser.add_argument("output_file", action="store", nargs='?')
-    parser.add_argument("training_set", action="store")
-    parser.add_argument("test_set", action="store", nargs='?')
+    parser.add_argument("training_set", action="store", 
+                        help="Must be at end of command.")
+    parser.add_argument("test_set", action="store", nargs='?',
+                        help="Must be at end of command.")
 
     parser.usage = ("ngrams.py [-h] [-n N] -sent training_set\n              "
                     "   [-h] [-n N] [-sent] [-t T] [-ls [\u03B1] | -gts] [-p] "
                     "[-c [CATEGORY_NUM] output_file] training_set test_set")
+
     error_str = ""
     opts = parser.parse_args()
-    if opts.classify.isdigit():
-        opts.classify = int(opts.classify)
-        if opts.classify <= 0:
-            error_str += "Feature number must be >= 1.\n"
+    if opts.classify:
+        try:
+            opts.classify = int(opts.classify)
+        except ValueError:
+            error_str += ("argument -c: invalid int value: "
+                          "'%s'\n" % opts.classify)
+        else:
+            if opts.classify <= 0:
+                error_str += ("argument -c: invalid int value: "
+                              "category number must be >= 1.\n")
     if opts.classify and opts.output_file and not opts.test_set:
         opts.test_set = opts.training_set
         opts.training_set = opts.output_file
@@ -861,27 +879,29 @@ def parse_args():
     elif opts.classify and not opts.output_file:
         if error_str:
             error_str += "                  "
-        error_str += ("Must input an output file when performing "
-                      "classification (-c).\n")
-    if opts.perplexity or opts.classify:
+        error_str += ("too few arguments: must input an output file when "
+                      "performing classification (-c).\n")
+    if opts.perplexity or opts.classify or (opts.classify == 0):
         if not opts.test_set:
             if error_str:
                 error_str += "                  "
-            error_str += ("Must input a test set, if performing perplexity "
-                          "based operations (-p and -c).\n")
+            error_str += ("too few arguments: must input a test set, if "
+                          "performing perplexity based operations "
+                          "(-p and -c).\n")
         if opts.threshold < 1:
             if error_str:
                 error_str += "                  "
-            error_str += ("Threshold must be >= 1, if performing perplexity "
-                          "based operations (-p and -c).\n")
+            error_str += ("argument -t: invalid int value: threshold must be "
+                          ">= 1, if performing perplexity based operations "
+                          "(-p and -c).\n")
     if opts.threshold < 0:
         if error_str:
             error_str += "                  "
-        error_str += "Threshold must be > 0.\n"
+        error_str += "argument -t: invalid int value: threshold must be > 0.\n"
     if opts.n < 1:
         if error_str:
             error_str += "                  "
-        error_str += "N must be >= 1.\n"
+        error_str += "argument -n: invalid int value: N must be >= 1.\n"
     if opts.n > 24:
         input = raw_input if sys.version_info < (3,) else input
         warning_str = ("Warning: program may crash at such a high N. "
@@ -891,7 +911,8 @@ def parse_args():
             if (cont == 'n') or (cont == 'N'):
                 if error_str:
                     error_str += "                  "
-                error_str += "Choose to not continue with high N.\n"
+                error_str += ("argument -n: choose to not continue "
+                              "with high N.\n")
                 break
             elif (cont == 'y') or (cont == 'Y'):
                 break
@@ -899,11 +920,13 @@ def parse_args():
     if opts.turing and (opts.n > 2):
         if error_str:
             error_str += "                  "
-        error_str += "Good turing smoothing is only available for n <= 2.\n"
+        error_str += ("argument -n: invalid int value: Good Turing "
+                      "smoothing only available for n <= 2.\n")
     if isnan(opts.laplace) or (opts.laplace == float('inf')):
         if error_str:
             error_str += "                  "
-        error_str += "\u03B1 cannot be NaN and cannot be inf (\u221E).\n"
+        error_str += ("argument -ls: invalid int value: \u03B1 cannot "
+                      "be NaN and cannot be inf (\u221E).\n")
 
     if error_str:
         parser.error(error_str[:-1])
@@ -927,7 +950,7 @@ def main():
     opts = parse_args()
     n = opts.n
     gts = opts.turing
-    train_str = test_str = 0
+    train_str = test_str = None
 
     model = Ngrams(opts)
     if opts.sentence:
@@ -1021,7 +1044,7 @@ def main():
             for _ in range_wrap(model.num_features):
                 last_comma = line.find(',', last_comma+1)
                 if last_comma == -1:
-                    sys.exit("More categories are defined than are present.")
+                    model.error_handler(5)
 
             t_arg.set_datum(line[last_comma+2:].split())
 
