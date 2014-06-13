@@ -48,12 +48,12 @@ knows that it will be classified.
 Example:
 
     ./ngrams.py -ls .2 -p kjbible.train kjbible.test
-    Perplexity: 272.062210834
+    Perplexity: 300.320408752646
 
 The perplexity will slightly depend on the Python version, as the math module
 was updated in Python 3.x.
 
-## Classification
+## Multi-Class Classification
 
 You can classify text a pieces of text by providing a training set and the test
 set you wish to classify. The examples provided in the test set will have their
@@ -73,4 +73,4 @@ Example:
 
     ./ngrams.py -n 2 -sent -ls .2 -p -c 1 classes.txt reviews.train reviews.test
     When I complained I asked for us to be transferred to the Sheraton which they arranged for us .
-    Perplexity: 194.77786173
+    Perplexity: 221.3350358072386
