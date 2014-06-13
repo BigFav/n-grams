@@ -132,12 +132,10 @@ class Ngrams:
         for ch in punct:
             tokens = tokens.replace(ch, ' ' + ch + ' ')
         tokens = re.sub("\.\.+", " \u2026 ", tokens)
-        tokens = re.sub("(\!+\?|\?+\!)[?!]*",
-                        " \u203D" + start_tokens, tokens)
+        tokens = re.sub("(\!+\?|\?+\!)[?!]*", " \u203D" + start_tokens, tokens)
         tokens = re.sub("\!\!+", " !!" + start_tokens, tokens)
         tokens = re.sub("\?\?+", " ??" + start_tokens, tokens)
-        tokens = re.sub("((?<![.?!\s])[.?!])",
-                        r" \1" + start_tokens, tokens)
+        tokens = re.sub(r"(?<![\1])([.?!])", r" \1" + start_tokens, tokens)
         tokens = re.sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
         if self.feature_num:
             # Ensure every line ends with an end token
