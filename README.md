@@ -71,6 +71,6 @@ be at the end of every command, in that order.
 
 Example:
 
-    ./ngrams.py -n 10 -sent -ls .2 -p -c 1 classes.txt reviews.train reviews.test
+    ./ngrams.py -n 2 -sent -ls .2 -p -c 1 classes.txt reviews.train reviews.test
     When I complained I asked for us to be transferred to the Sheraton which they arranged for us .
-    Perplexity: 1995.00234846
+    Perplexity: 194.77786173
