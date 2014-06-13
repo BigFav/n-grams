@@ -48,7 +48,7 @@ knows that it will be classified.
 Example:
 
     ./ngrams.py -ls .2 -p kjbible.train kjbible.test
-    Perplexity: 300.320408752646
+    Perplexity: 216.38605101456963
 
 The perplexity will slightly depend on the Python version, as the math module
 was updated in Python 3.x.
@@ -73,4 +73,4 @@ Example:
 
     ./ngrams.py -n 2 -sent -ls .2 -p -c 1 classes.txt reviews.train reviews.test
     When I complained I asked for us to be transferred to the Sheraton which they arranged for us .
-    Perplexity: 221.3350358072386
+    Perplexity: 197.39047765478648
