@@ -73,4 +73,4 @@ Example:
 
     ./ngrams.py -n 2 -sent -ls .2 -p -c 1 classes.txt reviews.train reviews.test
     When I complained I asked for us to be transferred to the Sheraton which they arranged for us .
-    Perplexity: 197.39047765478648
+    Perplexity: 218.65148036450822

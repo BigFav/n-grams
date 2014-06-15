@@ -132,10 +132,11 @@ class Ngrams:
         for ch in punct:
             tokens = tokens.replace(ch, ' ' + ch + ' ')
         tokens = re.sub("\.\.+", " \u2026 ", tokens)
+        tokens = tokens.replace(".", " ." + start_tokens)
         tokens = re.sub("(\!+\?|\?+\!)[?!]*", " \u203D" + start_tokens, tokens)
         tokens = re.sub("\!\!+", " !!" + start_tokens, tokens)
         tokens = re.sub("\?\?+", " ??" + start_tokens, tokens)
-        tokens = re.sub(r"(?<![\1])([.?!])", r" \1" + start_tokens, tokens)
+        tokens = re.sub("(?<![?!\s])([?!])", r" \1" + start_tokens, tokens)
         tokens = re.sub("(?<=[a-zI])('[a-z][a-z]?)\s", r" \1 ", tokens)
         if self.feature_num:
             # Ensure every line ends with an end token
@@ -264,6 +265,46 @@ class Ngrams:
 
         return word_freq_pairs
 
+    def top_lvl_unk_tokenize(self, total_words, tokens):
+        unk_words = set()
+        itms = total_words.iteritems() if self.python2 else total_words.items()
+        for word, count in itms:
+            if count <= self.threshold:
+                unk_words.add(word)
+                total_words[self.unk_token] += count
+
+        unk_words.discard(self.start_token)
+        unk_words.discard(self.end_token)
+        unk_words.discard(self.unk_token)
+
+        if unk_words:
+            tokens = [self.unk_token if word in unk_words else word
+                      for word in tokens]
+        return tokens, unk_words
+
+    def bottom_unk_tokenize(self, word_freq_pairs, n):
+        list_wrap = list if not self.python2 else lambda x: x
+        tmp_pairs = word_freq_pairs
+        stack = [(tmp_pairs, n)]
+
+        while stack:
+            tmp_pairs, n = stack.pop()
+            if n == 2:
+                values = (tmp_pairs.itervalues() if self.python2 else
+                          tmp_pairs.values())
+                for nxt_lvl_dict in values:
+                    for word, count in list_wrap(nxt_lvl_dict.items()):
+                        if (count <= self.threshold and
+                                word != self.unk_token):
+                            del nxt_lvl_dict[word]
+                            nxt_lvl_dict[self.unk_token] += count
+            else:
+                n -= 1
+                for word in tmp_pairs:
+                    stack.append((tmp_pairs[word], n))
+
+        return word_freq_pairs
+
     def bi_count_pairs(self, tokens, n, unk):
         list_wrap = (lambda x: x) if self.python2 else list
         start_token = self.start_token
@@ -276,58 +317,21 @@ class Ngrams:
         self.total_words[self.unk_token] = 0
 
         if unk:
-            unk_words = set()
-            items = (self.total_words.iteritems() if self.python2 else
-                     self.total_words.items())
-            for word, count in items:
-                if count <= thresh:
-                    unk_words.add(word)
-                    self.total_words[unk_token] += count
-
-            unk_words.discard(start_token)
-            unk_words.discard(end_token)
-            unk_words.discard(unk_token)
-
-            for word in unk_words:
+            tokens, unks = self.top_lvl_unk_tokenize(self.total_words, tokens)
+            for word in unks:
                 del self.total_words[word]
-
-            # replace words in tokens with <u>
-            if unk_words:
-                tokens = [unk_token if word in unk_words else word
-                          for word in tokens]
 
         word_freq_pairs = {word: defaultdict(int) for word in self.total_words}
         for i, token in enumerate(tokens[:-1]):
             word_freq_pairs[token][tokens[i+1]] += 1
 
-        if unk:
-            items = (word_freq_pairs.iteritems() if self.python2 else
-                     word_freq_pairs.items())
-            for word, nxt_lvl_dict in items:
-                unk_words = set()
-                nxt_lvl_items = (nxt_lvl_dict.iteritems() if self.python2 else
-                                 nxt_lvl_dict.items())
-                for second_word, count in nxt_lvl_items:
-                    if count <= thresh:
-                        unk_words.add(second_word)
-
-                unk_words.discard(start_token)
-                unk_words.discard(end_token)
-                unk_words.discard(unk_token)
-                nxt_lvl_dict.update((unk_token, nxt_lvl_dict[unk_token] + cnt)
-                                    for wrd2, cnt in
-                                    list_wrap(nxt_lvl_dict.items())
-                                    if wrd2 in unk_words)
-
-                for unk_word in unk_words:
-                    del nxt_lvl_dict[unk_word]
-
-        return word_freq_pairs
+        return (self.bottom_unk_tokenize(word_freq_pairs, self.n) if unk else
+                word_freq_pairs)
 
     """
-    Creates the counts for the dictionaries (i.e. creates the dicts).
-    Takes in the dicts so far, and the current word, along with
-    the next n-1 words. O(1) space.
+    Increments the counts for the dictionaries (used to create the
+    dicts). Takes in the dicts so far, and the current word, along
+    with the next n-1 words. O(1) space extra space.
     """
     def dict_creator(self, freq_dict, wrd, words):
         if words:
@@ -359,50 +363,13 @@ class Ngrams:
                 freq_tmp[words[-2]] = defaultdict(int)
             freq_tmp[words[-2]][words[-1]] += 1
 
-    def unk_tokenize(self, word_freq_pairs, n):
-        list_wrap = list if not self.python2 else lambda x: x
-        tmp_pairs = word_freq_pairs
-        stack = [(tmp_pairs, n)]
-
-        while stack:
-            tmp_pairs, n = stack.pop()
-            if n == 2:
-                values = (tmp_pairs.itervalues() if self.python2 else
-                          tmp_pairs.values())
-                for nxt_lvl_dict in values:
-                    for word, count in list_wrap(nxt_lvl_dict.items()):
-                        if (count <= self.threshold and
-                                word != self.unk_token):
-                            del nxt_lvl_dict[word]
-                            nxt_lvl_dict[self.unk_token] += count
-            else:
-                n -= 1
-                for word in tmp_pairs:
-                    stack.append((tmp_pairs[word], n))
-
-        return word_freq_pairs
 
     def n_count_pairs(self, tokens, n, unk):
         if unk:
             # Replace low-freq top-level tokens with unks
             self.total_words = Counter(tokens)
             self.total_words[self.unk_token] = 0
-
-            unk_words = set()
-            items = (self.total_words.iteritems() if self.python2 else
-                     self.total_words.items())
-            for word, count in items:
-                if count <= self.threshold:
-                    unk_words.add(word)
-                    self.total_words[self.unk_token] += count
-
-            unk_words.discard(self.start_token)
-            unk_words.discard(self.end_token)
-            unk_words.discard(self.unk_token)
-
-            if unk_words:
-                tokens = [self.unk_token if word in unk_words else word
-                          for word in tokens]
+            tokens, _ = self.top_lvl_unk_tokenize(self.total_words, tokens)
 
         dict_type = dict if n > 3 else int
         self.total_words = {token: defaultdict(dict_type) for token in tokens}
@@ -420,7 +387,7 @@ class Ngrams:
         token = tokens[-self.n]
         self.dict_creator(word_freq_pairs[token], token, words_infront)
 
-        return (self.unk_tokenize(word_freq_pairs, self.n) if unk else
+        return (self.bottom_unk_tokenize(word_freq_pairs, self.n) if unk else
                 word_freq_pairs)
 
     """
@@ -601,39 +568,20 @@ class Ngrams:
     """
     def generateSentence(self, n):
         sentence = []
-
-        word = self.weightedPickUni()
-        while word != self.end_token:
-            sentence.append(word)
-            word = self.weightedPickUni()
-
-        print(' '.join(sentence))
-
-    def weightedPickUni(self):
-        s = 0.0
-        key = ""
-        values = (self.unigrams.itervalues() if self.python2 else
-                  self.unigrams.values())
-        r = random.uniform(0, sum(values))
-
-        items = (self.unigrams.iteritems() if self.python2 else
-                 self.unigrams.items())
-        for key, weight in items:
-            s += weight
-            if r < s:
-                return key
-        return key
-
-    def generateNgramSentence(self):
-        sentence = []
-        words = [self.start_token] * (self.n-1)
-        ngrams = self.bigrams if self.n == 2 else self.ngrams
+        words = [self.start_token] * (n-1)
+        if n == 1:
+            ngrams = self.unigrams
+        elif n == 2:
+            ngrams = self.bigrams
+        else:
+            ngrams = self.ngrams
 
         word = self.weightedPickN(words, ngrams)
         while word != self.end_token:
+            if n != 1:
+                del words[0]
+                words.append(word)
             sentence.append(word)
-            del words[0]
-            words.append(word)
             word = self.weightedPickN(words, ngrams)
 
         print(' '.join(sentence))
@@ -918,7 +866,7 @@ def main():
         else:
             model.unsmoothed_ngrams(word_freq_pairs, total_words, n)
 
-        model.generateSentence(n) if n == 1 else model.generateNgramSentence()
+        model.generateSentence(n)
 
     if opts.perplexity:
         train_str, word_freq_pairs, total_words = model.init(n, 1, train_str)
