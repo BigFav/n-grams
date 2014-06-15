@@ -176,7 +176,7 @@ class Ngrams:
 
         if typ < 2:
             # Put the leftover start tokens in the beginning
-            tmp = list_wrap(filter(bool, string.split()))
+            tmp = string.split()
             tokens = []
             for i in range_wrap(n-1):
                 tokens.append(tmp.pop())
